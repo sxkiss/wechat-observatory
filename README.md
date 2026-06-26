@@ -18,7 +18,7 @@
 
 ### 小米设备解锁
 
-如果你手上是小米机型，先把解锁这一步走通，可以参考 [Linuxoid-cn/Mi8G3-Unlocker](https://github.com/Linuxoid-cn/Mi8G3-Unlocker)。
+如果你手上是小米机型，先把解锁这一步走通，给你们指一条明路：[Linuxoid-cn/Mi8G3-Unlocker](https://github.com/Linuxoid-cn/Mi8G3-Unlocker)。
 
 WeChat Observatory（微信看台）是一个通过 Android LSPosed 模块接入微信的网关控制台。手机模块负责在微信进程内观察消息、同步联系人、执行发送；服务端负责 API Key 身份、当前微信账号绑定、消息持久化、出站队列和 Web 管理台。
 
