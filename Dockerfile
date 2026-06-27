@@ -1,4 +1,12 @@
-﻿FROM golang:1.24.2-alpine AS build
+FROM node:20-alpine AS web-build
+
+WORKDIR /src/web/admin
+COPY web/admin/package*.json ./
+RUN npm ci
+COPY web/admin ./
+RUN npm run build
+
+FROM golang:1.24.2-alpine AS build
 
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY}
@@ -7,6 +15,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=web-build /src/internal/bridge/admin_dist ./internal/bridge/admin_dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/wechat-observatory ./cmd/bridge
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/wechat-observatory-db ./cmd/bridge-db
 

@@ -27,26 +27,17 @@ cp deploy/docker/.env.example deploy/docker/.env
 
 ```text
 BRIDGE_ADMIN_PASSWORD=your-strong-admin-password
-BRIDGE_MYSQL_DSN=wechat:change-me@tcp(127.0.0.1:3306)/app_wechat_observatory?charset=utf8mb4&parseTime=True&loc=Local
+MYSQL_PASSWORD=your-strong-mysql-password
+MYSQL_ROOT_PASSWORD=your-strong-root-password
 ```
 
-构建镜像：
+构建镜像并启动服务：
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml build
+docker compose -f deploy/docker/docker-compose.yml up -d --build
 ```
 
-执行数据库工具：
-
-```bash
-docker compose -f deploy/docker/docker-compose.yml --profile tools run --rm gateway-db
-```
-
-启动服务：
-
-```bash
-docker compose -f deploy/docker/docker-compose.yml up -d gateway
-```
+Compose 会启动 MySQL，等待数据库健康，执行一次 `gateway-db` 初始化任务，然后启动网关。
 
 检查状态：
 
@@ -63,9 +54,7 @@ http://<server-host>:8088/admin/
 ## 更新版本
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml build
-docker compose -f deploy/docker/docker-compose.yml --profile tools run --rm gateway-db
-docker compose -f deploy/docker/docker-compose.yml up -d gateway
+docker compose -f deploy/docker/docker-compose.yml up -d --build
 ```
 
 ## k3s 参考

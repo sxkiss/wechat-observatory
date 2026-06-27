@@ -153,10 +153,8 @@ cd android-module
 
 ```bash
 cp deploy/docker/.env.example deploy/docker/.env
-# 编辑 deploy/docker/.env，至少修改 BRIDGE_ADMIN_PASSWORD 和 BRIDGE_MYSQL_DSN
-docker compose -f deploy/docker/docker-compose.yml build
-docker compose -f deploy/docker/docker-compose.yml --profile tools run --rm gateway-db
-docker compose -f deploy/docker/docker-compose.yml up -d gateway
+# 编辑 deploy/docker/.env，至少修改 BRIDGE_ADMIN_PASSWORD、MYSQL_PASSWORD 和 MYSQL_ROOT_PASSWORD
+docker compose -f deploy/docker/docker-compose.yml up -d --build
 curl -fsS http://127.0.0.1:8088/healthz
 ```
 
