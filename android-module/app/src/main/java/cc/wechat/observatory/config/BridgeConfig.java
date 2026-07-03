@@ -38,6 +38,7 @@ public final class BridgeConfig {
     public boolean includeChatrooms;
     public boolean mediaUploadEnabled;
     public long mediaUploadLimitBytes;
+    public int targetAndroidUserId;
     public String signature;
 
     private BridgeConfig() {
@@ -59,6 +60,7 @@ public final class BridgeConfig {
         config.includeChatrooms = booleanSetting(properties, "contact_include_chatrooms", true);
         config.mediaUploadEnabled = booleanSetting(properties, "media_upload_enabled", true);
         config.mediaUploadLimitBytes = longSetting(properties, "media_upload_limit_bytes", 5L * 1024L * 1024L);
+        config.targetAndroidUserId = (int) longSetting(properties, "target_android_user_id", -1L);
         config.signature = configSignature(properties);
         logConfigOnce(config, properties);
         return config;
@@ -285,7 +287,8 @@ public final class BridgeConfig {
                 + " selfWxid=" + (Strings.isBlank(config.selfWxid) ? "<empty>" : config.selfWxid)
                 + " apiKey=" + (Strings.isBlank(config.apiKey) ? "<empty>" : "<set>")
                 + " pollIntervalMs=" + config.pollIntervalMs
-                + " includeChatrooms=" + config.includeChatrooms);
+                + " includeChatrooms=" + config.includeChatrooms
+                + " targetAndroidUserId=" + config.targetAndroidUserId);
     }
 
     private static void logProviderConfigOnce(String message) {
@@ -340,7 +343,8 @@ public final class BridgeConfig {
                 "contact_sync_limit",
                 "contact_include_chatrooms",
                 "media_upload_enabled",
-                "media_upload_limit_bytes"
+                "media_upload_limit_bytes",
+                "target_android_user_id"
         }) {
             out.append(key).append('=').append(setting(properties, key, "")).append('\n');
         }

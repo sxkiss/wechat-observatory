@@ -1,0 +1,34 @@
+{
+  "sample_id": "link.private.basic",
+  "kind": "appmsg.link",
+  "direction": "outbound",
+  "wechat_type": 49,
+  "verification": "db-verified",
+  "input": {
+    "action_kind": "link",
+    "target": "<peer>",
+    "appmsg_title": "<synthetic-title>",
+    "appmsg_description": "<synthetic-description>",
+    "appmsg_url": "https://example.invalid/article",
+    "appmsg_app_name": "<synthetic-app-name>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "appmsg",
+    "message_type": 49,
+    "appmsg_type": 5,
+    "appmsg_subtype": "link",
+    "evidence": [
+      "outbox.kind=link",
+      "wechat.local_db.message.type=49",
+      "raw_xml.appmsg.type=5"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "tracking_url",
+    "raw_xml"
+  ]
+}
+

@@ -17,6 +17,7 @@ public final class MessagePayload {
     public String sender;
     public String text;
     public int messageType;
+    public String rawXml;
     public String mediaKind;
     public String mediaMime;
     public String mediaName;
@@ -40,6 +41,7 @@ public final class MessagePayload {
                 + "\"sender\":\"" + Strings.json(sender) + "\","
                 + "\"text\":\"" + Strings.json(text) + "\","
                 + "\"message_type\":" + messageType + ","
+                + "\"raw_xml\":\"" + Strings.json(rawXml) + "\","
                 + "\"media_kind\":\"" + Strings.json(mediaKind) + "\","
                 + "\"media_mime\":\"" + Strings.json(mediaMime) + "\","
                 + "\"media_name\":\"" + Strings.json(mediaName) + "\","

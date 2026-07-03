@@ -1,0 +1,48 @@
+{
+  "sample_id": "emoji.group.direct-md5",
+  "kind": "emoji",
+  "direction": "outbound",
+  "wechat_type": 47,
+  "verification": "db-verified",
+  "input": {
+    "action_kind": "emoji",
+    "target": "<room>",
+    "emoji_md5": "<redacted-existing-local-emoji-md5>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "emoji",
+    "message_type": 47,
+    "media_kind": "emoji",
+    "appmsg_subtype": "emoji",
+    "chat_kind": "room",
+    "target_allowlist": "group_name_contains_youfeng",
+    "evidence": [
+      "target.contact.nickname_or_remark_or_alias LIKE %有风%",
+      "outbox.kind=emoji",
+      "outbox.payload_json.emoji_md5=<redacted>",
+      "wechat.local_db.message.type=47",
+      "wechat.local_db.message.talker=<room>"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "room_id",
+    "sender_wxid",
+    "emoji_md5",
+    "raw_xml",
+    "cdn_auth_key",
+    "aes_key"
+  ],
+  "verified_sample": {
+    "outbox_id": 52,
+    "target_allow_state": "allowed_name_match",
+    "recent_event_count": 41,
+    "outgoing_event_id": 4093,
+    "outgoing_chat_record_id": 9149
+  },
+  "needs_more_samples": [
+    "private-direct-emoji-md5",
+    "additional-emoji-package-md5"
+  ]
+}

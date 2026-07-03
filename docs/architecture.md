@@ -3,12 +3,13 @@
 ## Goal
 
 `wechat-observatory` is a standalone WeChat gateway console for observing and
-manually sending WeChat messages through a phone-installed LSPosed module.
+sending WeChat messages through a phone-installed LSPosed module.
 
 It does not call external chat-session services, QR-login adapters, or old
 protocol bridges. It also does not parse commands or generate automatic
 business replies. Incoming messages are persisted and published to the admin
-console; outbound messages are created only by explicit admin actions.
+console and public adapter API; outbound messages are created only by explicit
+admin or API actions.
 
 ## Data Flow
 
@@ -23,11 +24,11 @@ flowchart LR
   WeChat -->|"message observation"| Module
   Module -->|"POST /webhook/lsposed/message"| Gateway
   Gateway -->|"persist + live event"| Admin
-  Admin -->|"manual send"| Gateway
-  Gateway -->|"enqueue manual text"| Outbox
+  Admin -->|"manual send or public API action"| Gateway
+  Gateway -->|"enqueue Action Outbox item"| Outbox
   Module -->|"WebSocket or HTTP poll"| Gateway
   Gateway -->|"leased send action"| Module
-  Module -->|"send text inside WeChat"| WeChat
+  Module -->|"send text/media/appmsg inside WeChat"| WeChat
   Module -->|"ACK"| Gateway
 ```
 
@@ -37,7 +38,7 @@ The gateway is the observation and manual-send point:
 2. The LSPosed module observes the message and posts a normalized event to the
    gateway.
 3. The gateway stores the event and publishes it to the admin console.
-4. An operator may manually queue text from the admin console.
+4. An operator or trusted adapter may queue an Action Outbox v1 item.
 5. The module receives a queued item through WebSocket or HTTP polling, sends it
    inside WeChat, and ACKs the item back to the gateway.
 

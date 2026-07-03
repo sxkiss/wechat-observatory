@@ -1,0 +1,27 @@
+{
+  "description": "Sanitized public API examples for external adapters.",
+  "fixture_set": "public-api-v1",
+  "fixtures": [
+    "public-api-v1.text.json",
+    "public-api-v1.image.json",
+    "public-api-v1.video.json",
+    "public-api-v1.voice.json",
+    "public-api-v1.file.json",
+    "public-api-v1.emoji.json",
+    "public-api-v1.location.json",
+    "public-api-v1.quote.json",
+    "public-api-v1.link.json",
+    "public-api-v1.mini-program.json",
+    "public-api-v1.chat-history.json",
+    "public-api-v1.payment.json",
+    "public-api-v1.system.json",
+    "public-api-v1.unknown.json"
+  ],
+  "protocol_version": "v1",
+  "rules": [
+    "Use stable wxid or room id as target; display names are presentation only.",
+    "Do not log API keys, real identifiers, raw XML, media base64, cookies, tokens, or full chat bodies.",
+    "Send responses mean queued only; use status_url until sent or failed.",
+    "Download media through /api/media/... with the same API key scope."
+  ]
+}

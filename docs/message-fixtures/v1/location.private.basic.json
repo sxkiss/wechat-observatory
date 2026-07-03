@@ -1,0 +1,31 @@
+{
+  "sample_id": "location.private.basic",
+  "kind": "location",
+  "direction": "outbound",
+  "wechat_type": 48,
+  "verification": "user-confirmed",
+  "input": {
+    "action_kind": "location",
+    "target": "<peer>",
+    "location_latitude": 31.2304,
+    "location_longitude": 121.4737,
+    "location_scale": 16,
+    "location_label": "<synthetic-location-label>",
+    "location_poiname": "<synthetic-poi-name>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "location",
+    "message_type": 48,
+    "evidence": [
+      "outbox.kind=location",
+      "wechat.local_db.message.type=48"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "precise_private_location"
+  ]
+}
+

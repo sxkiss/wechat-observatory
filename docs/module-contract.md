@@ -43,6 +43,17 @@ Admin endpoints use `X-Bridge-Password: <BRIDGE_ADMIN_PASSWORD>` or
 - `POST /api/api-keys/{key}/enable`
 - `DELETE /api/api-keys/{key}`
 - `POST /api/send/text`
+- `POST /api/send/action`
+
+Public adapter endpoints use `X-Bridge-API-Key: <api_key>` and are the stable
+surface for external bot frameworks or plugins.
+
+- `GET /api/v1/capabilities`
+- `GET /api/v1/messages`
+- `GET /api/v1/ws`
+- `POST /api/v1/messages/{kind}`
+- `POST /api/v1/messages/action`
+- `GET /api/v1/outbox/{id}`
 
 ## Registration
 
@@ -204,8 +215,10 @@ Rules:
 
 ## Outbox
 
-Manual admin sends call `POST /api/send/text` and create rows in
-`bridge_module_outbox`.
+Manual admin sends call `POST /api/send/text` or `POST /api/send/action` and
+create rows in `bridge_module_outbox`. External adapters should prefer
+`POST /api/v1/messages/{kind}`, which uses the same Action Outbox v1 state
+machine but returns the public `status_url` contract.
 
 Request:
 
@@ -218,11 +231,23 @@ Request:
 }
 ```
 
+Action fields:
+
+- `kind`: send action kind. Current sendable kinds are `text`, `image`,
+  `video`, `voice`, `file`, `emoji`, `location`, `quote`, `link`,
+  `mini_program`, and `chat_history`.
+- `text`: compatibility text body for legacy text sends.
+- `payload_json`: structured action payload for media, appmsg, location,
+  emoji, quote, and chat-history sends.
+- `media_url`, `media_name`, `media_mime`, `media_size`: media metadata passed
+  to the module when the action needs an attachment.
+
 Rules:
 
 - `owner_wxid` is required for admin sends.
 - A stale `owner_wxid` is rejected so an old browser state cannot enqueue a
   message for the wrong WeChat login.
+- Unknown or unsupported `kind` values must be ACKed as `failed` by the module.
 - The gateway leases at most one outbox item per poll or WebSocket wake.
 - HTTP poll/ACK and WebSocket ACK use the same state machine.
 - Successful ACKs are stored as `raw_provider=module_ack` outbound events.

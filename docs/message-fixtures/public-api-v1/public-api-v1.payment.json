@@ -1,0 +1,50 @@
+{
+  "adapter_notes": [
+    "红包和转账只做入站识别与脱敏；v1 不提供出站自动化。"
+  ],
+  "capability_status": "parse_only",
+  "fixture_id": "public-api-v1.payment",
+  "inbound_envelope": {
+    "appmsg_type": 2000,
+    "chat_display_name": "<display-name>",
+    "chat_id": "<conversation>",
+    "chat_kind": "direct",
+    "chat_record_id": 90001,
+    "create_time": 1793500000,
+    "device": "<device>",
+    "direction": "recv",
+    "event_id": 10001,
+    "evidence": [
+      "message.type=419430449",
+      "payment.parse_only"
+    ],
+    "from_wxid": "<peer>",
+    "id": "<message_id>",
+    "kind": "payment",
+    "message_type": 419430449,
+    "owner_wxid": "<owner>",
+    "subtype": "transfer",
+    "text": "[转账]",
+    "to_wxid": "<owner>",
+    "unsupported": [
+      "payment_outbound_unsupported",
+      "payment_sensitive_fields_redacted"
+    ]
+  },
+  "kind": "payment",
+  "outbound_supported": false,
+  "placeholders": {
+    "<conversation>": "Stable chat id; use this for routing, never display name.",
+    "<device>": "Bridge device name bound to the API key.",
+    "<owner>": "Current WeChat account on that device.",
+    "<peer>": "Other direct-chat participant.",
+    "<room>": "Group room id.",
+    "<target>": "Friend wxid or room id supplied by the caller."
+  },
+  "protocol_version": "v1",
+  "title": "支付类消息只读识别",
+  "unsupported": [
+    "payment_outbound_unsupported",
+    "payment_sensitive_fields_redacted"
+  ]
+}

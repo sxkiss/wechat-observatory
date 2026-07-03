@@ -105,7 +105,7 @@ android-module/app/build/outputs/apk/debug/
 - 当前设备有当前微信账号绑定。
 - 通讯录同步后可看到好友、群聊、文件传输助手。
 - 收到微信消息后，消息列表和聊天框自动刷新。
-- 从 Web 发送文本后，手机微信内能看到对应消息。
+- 从 Web 或公开 API 创建 Action Outbox 任务后，手机微信内能看到对应文本、媒体或结构化消息；具体类型按 `GET /api/v1/capabilities` 显示的状态验证。
 
 如果模块显示未注册，优先检查：
 

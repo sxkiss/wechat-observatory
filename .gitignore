@@ -17,3 +17,22 @@ web/admin/*.tsbuildinfo
 android-module/.gradle/
 android-module/build/
 android-module/app/build/
+
+# Local-only and generated artifacts
+.env.*
+!.env.example
+backups/
+__pycache__/
+*.py[cod]
+.Destination}}{{end}}
+*.db
+*.sqlite
+*.sqlite3
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+
+# Stray local shell/template output
+ .Destination}}{{end}}

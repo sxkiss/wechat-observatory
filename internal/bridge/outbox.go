@@ -32,14 +32,21 @@ func (o *MemoryOutbox) EnqueueReply(_ context.Context, action ReplyAction) (Modu
 	now := o.now()
 	item := memoryOutboxItem{
 		ModuleOutboxItem: ModuleOutboxItem{
-			ID:        o.nextID,
-			Device:    action.Device,
-			OwnerWxID: action.OwnerWxID,
-			WxID:      action.WxID,
-			Text:      action.Text,
-			Status:    "pending",
-			CreatedAt: formatRFC3339(now),
-			UpdatedAt: formatRFC3339(now),
+			ID:          o.nextID,
+			Device:      action.Device,
+			OwnerWxID:   action.OwnerWxID,
+			WxID:        action.WxID,
+			Kind:        firstNonEmpty(action.Kind, OutboxKindText),
+			Text:        action.Text,
+			PayloadJSON: append([]byte(nil), action.PayloadJSON...),
+			MediaKind:   action.MediaKind,
+			MediaMime:   action.MediaMime,
+			MediaName:   action.MediaName,
+			MediaURL:    action.MediaURL,
+			MediaSize:   action.MediaSize,
+			Status:      "pending",
+			CreatedAt:   formatRFC3339(now),
+			UpdatedAt:   formatRFC3339(now),
 		},
 	}
 	o.items = append(o.items, item)
@@ -104,6 +111,17 @@ func (o *MemoryOutbox) AckReplyActions(_ context.Context, req ModuleAckRequest) 
 		out = append(out, o.items[i].ModuleOutboxItem)
 	}
 	return out, nil
+}
+
+func (o *MemoryOutbox) GetReplyAction(_ context.Context, id int64) (ModuleOutboxItem, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, item := range o.items {
+		if item.ID == id {
+			return item.ModuleOutboxItem, nil
+		}
+	}
+	return ModuleOutboxItem{}, ErrOutboxItemNotFound
 }
 
 func formatRFC3339(t time.Time) string {

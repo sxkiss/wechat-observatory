@@ -1,0 +1,33 @@
+{
+  "sample_id": "file.private.basic",
+  "kind": "file",
+  "direction": "inbound_outbound",
+  "wechat_type": 49,
+  "verification": "user-confirmed",
+  "input": {
+    "action_kind": "file",
+    "target": "<peer>",
+    "media_url": "/api/media/<device>/<date>/<file>",
+    "media_name": "<safe-file-name>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "file",
+    "message_type": 49,
+    "media_kind": "file",
+    "appmsg_subtype": "file",
+    "evidence": [
+      "outbox.kind=file",
+      "wechat.local_db.message.type=49",
+      "raw_xml.appmsg.appattach.filename"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "media_base64",
+    "media_file_bytes",
+    "raw_xml"
+  ]
+}
+

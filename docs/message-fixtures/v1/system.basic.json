@@ -1,0 +1,25 @@
+{
+  "sample_id": "system.basic",
+  "kind": "system",
+  "direction": "inbound",
+  "wechat_type": 10000,
+  "verification": "parse-only",
+  "input": {
+    "module_event": "message",
+    "message_type": 10000,
+    "text": "<system-text-redacted>"
+  },
+  "expected": {
+    "message_kind": "system",
+    "outbound_supported": false,
+    "evidence": [
+      "wechat.local_db.message.type=10000"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "system_text"
+  ]
+}
+

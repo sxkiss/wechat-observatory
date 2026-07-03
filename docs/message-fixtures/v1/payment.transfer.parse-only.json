@@ -1,0 +1,48 @@
+{
+  "sample_id": "payment.transfer",
+  "kind": "payment",
+  "direction": "inbound",
+  "wechat_type": 419430449,
+  "verification": "static",
+  "input": {
+    "module_event": "message",
+    "message_type": 419430449,
+    "appmsg_type": 2000,
+    "alternate_wechat_type": 49,
+    "raw_xml_shape": "<msg><appmsg><type>2000</type>...</appmsg></msg>"
+  },
+  "expected": {
+    "message_kind": "payment",
+    "appmsg_subtype": "transfer",
+    "text": "[转账]",
+    "outbound_supported": false,
+    "redacted_fields": [
+      "appmsg_title",
+      "appmsg_description",
+      "appmsg_url",
+      "appmsg_app_name",
+      "raw_xml"
+    ],
+    "unsupported": [
+      "payment_outbound_unsupported",
+      "payment_sensitive_fields_redacted"
+    ],
+    "evidence": [
+      "message.type=419430449",
+      "payment.message_type.transfer",
+      "message.type=49",
+      "raw_xml.appmsg",
+      "raw_xml.appmsg.type=2000",
+      "payment.parse_only"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "transaction_id",
+    "money_amount",
+    "payer_or_payee",
+    "auth_key",
+    "raw_xml"
+  ]
+}

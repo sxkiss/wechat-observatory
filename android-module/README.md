@@ -8,7 +8,7 @@ for the module to receive and send from inside the WeChat process.
 
 The current public compatibility target is WeChat for Android `8.0.75`.
 WeChat internals change between releases; validate message observation, contact
-sync, media upload, and text send after upgrading WeChat.
+sync, media upload, and Action Outbox sends after upgrading WeChat.
 
 ## Hook Point
 
@@ -118,8 +118,9 @@ The outbox WebSocket loop runs on its own daemon worker. The main worker keeps
 registration, contact sync, and inbound message polling fallback alive while
 the outbox socket is connected.
 
-The send hook is intentionally isolated in `HookEntry.sendText`. For WeChat
-Android `8.0.75`, it uses the lower-level send builder path:
+The send adapter is intentionally isolated behind Action Outbox dispatch in
+`HookEntry`. Text still uses the lower-level builder path on WeChat Android
+`8.0.75`:
 
 ```text
 w11.s1.a(toUser) -> w11.r1.g/e/h(...) -> w11.r1.a().a()
@@ -131,6 +132,12 @@ WeChat's service-locator initialization guard from the module worker thread, so
 the builder is the safer primary path. Both paths are WeChat-process calls; the
 module does not parse or execute commands.
 
+Action Outbox v1 dispatches `text`, `image`, `video`, `voice`, `file`, `emoji`,
+`location`, `quote`, `link`, `mini_program`, and `chat_history` from the gateway
+queue. Unsupported or malformed kinds must ACK `failed` instead of being
+silently skipped. Payment-like and system-only message types are observation
+boundaries, not send actions.
+
 On WeChat Android `8.0.75`, the installed app can run through Tinker. The send
 adapter must resolve WeChat classes with the patched runtime loader returned by
 `Application.getClassLoader()`, which can be a `DelegateLastClassLoader` over
@@ -138,9 +145,9 @@ adapter must resolve WeChat classes with the patched runtime loader returned by
 `PathClassLoader` can load duplicate native libraries and leave WeChat kernel
 services uninitialized.
 
-After changing WeChat versions, validate the send path on a test account before
-using it with real conversations. The module should ACK `sent` only after the
-WeChat-process send call returns without an error.
+After changing WeChat versions, validate the send paths on a test account
+before using them with real conversations. The module should ACK `sent` only
+after the WeChat-process send call returns without an error.
 
 The send path currently returns a successful ACK without `chat_record_id`
 because the WeChat send calls do not return it. Precise local message-id

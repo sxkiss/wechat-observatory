@@ -1,0 +1,27 @@
+{
+  "sample_id": "text.private.basic",
+  "kind": "text",
+  "direction": "outbound",
+  "wechat_type": 1,
+  "verification": "user-confirmed",
+  "input": {
+    "action_kind": "text",
+    "target": "<peer>",
+    "text": "<synthetic-text>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "text",
+    "message_type": 1,
+    "evidence": [
+      "outbox.kind=text",
+      "wechat.local_db.message.type=1"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "text"
+  ]
+}
+

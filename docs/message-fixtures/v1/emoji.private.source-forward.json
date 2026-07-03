@@ -1,0 +1,35 @@
+{
+  "sample_id": "emoji.private.source-forward",
+  "kind": "emoji",
+  "direction": "outbound",
+  "wechat_type": 47,
+  "verification": "db-verified",
+  "input": {
+    "action_kind": "emoji",
+    "target": "<peer>",
+    "source_chat_record_id": "<source-local-id>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "emoji",
+    "message_type": 47,
+    "media_kind": "emoji",
+    "appmsg_subtype": "emoji",
+    "evidence": [
+      "outbox.kind=emoji",
+      "wechat.local_db.message.type=47",
+      "raw_xml.emoji.md5"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "emoji_md5",
+    "raw_xml",
+    "cdn_auth_key",
+    "aes_key"
+  ],
+  "needs_more_samples": [
+    "direct-emoji-md5"
+  ]
+}

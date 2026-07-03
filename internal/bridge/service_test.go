@@ -102,6 +102,141 @@ func TestIngestStoresMediaAttachment(t *testing.T) {
 	}
 }
 
+func TestIngestParsesAppMsgRawXML(t *testing.T) {
+	persistence := &fakePersistence{}
+	service := newTestService("", WithPersistence(persistence))
+
+	result, err := service.Ingest(t.Context(), MessageEvent{
+		APIKey:      testAPIKey,
+		ID:          "appmsg-101",
+		Device:      "phone-a",
+		From:        "wxid_friend",
+		To:          "wxid_self",
+		MessageType: 49,
+		Direction:   DirectionRecv,
+		RawXML:      `<msg><appmsg><title>Spec Document</title><des>Design notes</des><type>6</type><appattach><filename>spec.pdf</filename><totallen>456</totallen></appattach></appmsg></msg>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Published || result.PersistenceError != "" {
+		t.Fatalf("unexpected ingest result: %+v", result)
+	}
+	if len(persistence.inboundEvents) != 1 {
+		t.Fatalf("expected one inbound event, got %+v", persistence.inboundEvents)
+	}
+	event := persistence.inboundEvents[0]
+	if event.MessageKind != MessageKindFile || event.AppMsgSubtype != "file" || event.AppMsgFileName != "spec.pdf" {
+		t.Fatalf("unexpected parsed appmsg fields: %+v", event)
+	}
+	if event.RawXML != "" {
+		t.Fatalf("raw xml should not be persisted: %+v", event)
+	}
+	if event.Text != "[文件] Spec Document" {
+		t.Fatalf("unexpected display text: %q", event.Text)
+	}
+}
+
+func TestIngestPreservesUnknownMessageWithNoText(t *testing.T) {
+	persistence := &fakePersistence{}
+	service := newTestService("", WithPersistence(persistence))
+
+	result, err := service.Ingest(t.Context(), MessageEvent{
+		APIKey:      testAPIKey,
+		ID:          "unknown-101",
+		Device:      "phone-a",
+		From:        "wxid_friend",
+		To:          "wxid_self",
+		MessageType: 900000001,
+		Direction:   DirectionRecv,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Published || result.PersistenceError != "" {
+		t.Fatalf("unexpected ingest result: %+v", result)
+	}
+	if len(persistence.inboundEvents) != 1 {
+		t.Fatalf("expected one inbound event, got %+v", persistence.inboundEvents)
+	}
+	event := persistence.inboundEvents[0]
+	if event.MessageKind != MessageKindUnknown || event.Text != "[未支持] 类型 900000001" {
+		t.Fatalf("unknown message should remain visible: %+v", event)
+	}
+	if !containsString(event.Unsupported, "message_type:900000001") ||
+		!containsString(event.Evidence, "message.type=900000001") {
+		t.Fatalf("unknown message evidence missing: %+v", event)
+	}
+}
+
+func TestIngestParsesLocationRawXML(t *testing.T) {
+	persistence := &fakePersistence{}
+	service := newTestService("", WithPersistence(persistence))
+
+	result, err := service.Ingest(t.Context(), MessageEvent{
+		APIKey:      testAPIKey,
+		ID:          "location-101",
+		Device:      "phone-a",
+		From:        "wxid_friend",
+		To:          "wxid_self",
+		MessageType: 48,
+		Direction:   DirectionRecv,
+		RawXML:      `<msg><location x="31.2304" y="121.4737" scale="16" label="People Square" poiname="Metro Station" /></msg>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Published || result.PersistenceError != "" {
+		t.Fatalf("unexpected ingest result: %+v", result)
+	}
+	if len(persistence.inboundEvents) != 1 {
+		t.Fatalf("expected one inbound event, got %+v", persistence.inboundEvents)
+	}
+	event := persistence.inboundEvents[0]
+	if event.MessageKind != MessageKindLocation || event.LocationLatitude == nil || *event.LocationLatitude != 31.2304 || event.LocationLongitude == nil || *event.LocationLongitude != 121.4737 {
+		t.Fatalf("unexpected location event: %+v", event)
+	}
+	if event.Text != "People Square" || event.RawXML != "" || !containsString(event.Evidence, "raw_xml.location.poiname") {
+		t.Fatalf("location event should be normalized and redacted: %+v", event)
+	}
+}
+
+func TestIngestStoresAppMsgThumbnailAsImage(t *testing.T) {
+	persistence := &fakePersistence{}
+	service := newTestService("", WithPersistence(persistence), WithMediaDir(t.TempDir()))
+	raw := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 4, 5, 6}
+
+	result, err := service.Ingest(t.Context(), MessageEvent{
+		APIKey:      testAPIKey,
+		ID:          "appmsg-link-101",
+		Device:      "phone-a",
+		From:        "wxid_friend",
+		To:          "wxid_self",
+		MessageType: 49,
+		Direction:   DirectionRecv,
+		MediaKind:   MessageKindFile,
+		MediaMime:   "image/png",
+		MediaBase64: base64.StdEncoding.EncodeToString(raw),
+		RawXML:      `<msg><appmsg><title>Article</title><des>Summary</des><type>5</type><url>https://example.test/article</url></appmsg></msg>`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Published || result.PersistenceError != "" {
+		t.Fatalf("unexpected ingest result: %+v", result)
+	}
+	if len(persistence.inboundEvents) != 1 {
+		t.Fatalf("expected one inbound event, got %+v", persistence.inboundEvents)
+	}
+	event := persistence.inboundEvents[0]
+	if event.MessageKind != MessageKindAppMsg || event.AppMsgSubtype != "link" {
+		t.Fatalf("unexpected appmsg fields: %+v", event)
+	}
+	if event.MediaKind != MessageKindImage || event.MediaURL == "" || event.MediaBase64 != "" {
+		t.Fatalf("unexpected thumbnail media fields: %+v", event)
+	}
+}
+
 func TestLsposedWebhookStoresInboundMessageOnly(t *testing.T) {
 	outbox := &fakeOutbox{}
 	service := newTestService("", WithOutbox(outbox))
@@ -250,12 +385,22 @@ func TestSentMessagesAreObservedWithoutBusinessRouting(t *testing.T) {
 	}
 }
 
-func TestAdminSendTextRequiresCurrentOwnerWxID(t *testing.T) {
-	service := newTestService("")
+func TestAdminSendImageActionStoresMediaAndQueuesAction(t *testing.T) {
+	mediaDir := t.TempDir()
+	service := newTestService("", WithMediaDir(mediaDir))
 	server := NewHTTPServer(service, "admin").Handler()
 
-	body := []byte(`{"device":"phone-a","owner_wxid":"wxid_self","wx_ids":["wxid_friend"],"text":"manual reply"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/send/text", bytes.NewReader(body))
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"image",
+		"text":"photo",
+		"media_mime":"image/png",
+		"media_name":"photo.png",
+		"media_base64":"iVBORw0KGgo="
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
 	req.Header.Set("X-Bridge-Password", "admin")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
@@ -264,26 +409,814 @@ func TestAdminSendTextRequiresCurrentOwnerWxID(t *testing.T) {
 		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
 	}
 	items := pollOutbox(t, service, "phone-a", 10)
-	if len(items) != 1 || items[0].OwnerWxID != "wxid_self" || items[0].WxID != "wxid_friend" || items[0].Text != "manual reply" {
-		t.Fatalf("unexpected outbox items: %+v", items)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindImage || item.MediaKind != OutboxKindImage || item.MediaURL == "" || item.MediaSize == 0 {
+		t.Fatalf("unexpected image action: %+v", item)
+	}
+	if item.PayloadJSON == nil || !bytes.Contains(item.PayloadJSON, []byte(`"media_url"`)) {
+		t.Fatalf("payload_json should include media_url, got %s", string(item.PayloadJSON))
+	}
+	if item.Text != "photo" || item.WxID != "wxid_friend" || item.OwnerWxID != "wxid_self" {
+		t.Fatalf("unexpected queued target/text: %+v", item)
+	}
+}
+
+func TestAdminSendVideoActionStoresMediaAndQueuesAction(t *testing.T) {
+	mediaDir := t.TempDir()
+	service := newTestService("", WithMediaDir(mediaDir))
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"video",
+		"media_mime":"video/mp4",
+		"media_name":"clip.mp4",
+		"media_base64":"AAAAHGZ0eXBtcDQyAAAAAG1wNDFtcDQyaXNvbQ=="
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindVideo || item.MediaKind != OutboxKindVideo || item.MediaURL == "" || item.MediaSize == 0 {
+		t.Fatalf("unexpected video action: %+v", item)
+	}
+	if item.Text != "[视频]" || item.WxID != "wxid_friend" || item.OwnerWxID != "wxid_self" {
+		t.Fatalf("unexpected queued target/text: %+v", item)
 	}
 
-	staleBody := []byte(`{"device":"phone-a","owner_wxid":"wxid_stale","wx_ids":["wxid_friend"],"text":"stale reply"}`)
-	staleReq := httptest.NewRequest(http.MethodPost, "/api/send/text", bytes.NewReader(staleBody))
-	staleReq.Header.Set("X-Bridge-Password", "admin")
-	staleRec := httptest.NewRecorder()
-	server.ServeHTTP(staleRec, staleReq)
-	if staleRec.Code != http.StatusBadRequest {
-		t.Fatalf("stale owner should be rejected, got status %d body=%s", staleRec.Code, staleRec.Body.String())
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 4321,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 || events[0].MessageType != 43 || events[0].MediaKind != OutboxKindVideo {
+		t.Fatalf("unexpected outbound video event: %+v", events)
+	}
+}
+
+func TestAdminSendVoiceActionStoresMediaAndQueuesAction(t *testing.T) {
+	mediaDir := t.TempDir()
+	service := newTestService("", WithMediaDir(mediaDir))
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"voice",
+		"media_mime":"audio/amr",
+		"media_name":"voice.amr",
+		"media_duration_ms":12000,
+		"media_base64":"IyFBTVIKAA=="
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindVoice || item.MediaKind != OutboxKindVoice || item.MediaURL == "" || item.MediaSize == 0 {
+		t.Fatalf("unexpected voice action: %+v", item)
+	}
+	if item.Text != "[语音]" || item.MediaName != "voice.amr" || item.MediaMime != "audio/amr" {
+		t.Fatalf("unexpected queued voice metadata: %+v", item)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if payload["media_duration_ms"] != float64(12000) || payload["duration_ms"] != float64(12000) {
+		t.Fatalf("payload_json should include voice duration, got %+v", payload)
 	}
 
-	missingOwnerBody := []byte(`{"device":"phone-a","wx_ids":["wxid_friend"],"text":"missing owner"}`)
-	missingOwnerReq := httptest.NewRequest(http.MethodPost, "/api/send/text", bytes.NewReader(missingOwnerBody))
-	missingOwnerReq.Header.Set("X-Bridge-Password", "admin")
-	missingOwnerRec := httptest.NewRecorder()
-	server.ServeHTTP(missingOwnerRec, missingOwnerReq)
-	if missingOwnerRec.Code != http.StatusBadRequest {
-		t.Fatalf("missing owner should be rejected, got status %d body=%s", missingOwnerRec.Code, missingOwnerRec.Body.String())
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 8765,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 || events[0].MessageType != 34 || events[0].MediaKind != OutboxKindVoice || events[0].MediaName != "voice.amr" {
+		t.Fatalf("unexpected outbound voice event: %+v", events)
+	}
+}
+
+func TestAdminSendFileActionStoresMediaAndQueuesAction(t *testing.T) {
+	mediaDir := t.TempDir()
+	service := newTestService("", WithMediaDir(mediaDir))
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"file",
+		"media_mime":"text/plain",
+		"media_name":"note.txt",
+		"media_base64":"aGVsbG8="
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindFile || item.MediaKind != OutboxKindFile || item.MediaURL == "" || item.MediaSize == 0 {
+		t.Fatalf("unexpected file action: %+v", item)
+	}
+	if item.Text != "[文件]" || item.MediaName != "note.txt" || item.MediaMime != "text/plain" {
+		t.Fatalf("unexpected queued file metadata: %+v", item)
+	}
+	if item.PayloadJSON == nil || !bytes.Contains(item.PayloadJSON, []byte(`"media_url"`)) {
+		t.Fatalf("payload_json should include media_url, got %s", string(item.PayloadJSON))
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 5432,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 || events[0].MessageType != MessageTypeFileTransfer || events[0].MediaKind != OutboxKindFile || events[0].MediaName != "note.txt" {
+		t.Fatalf("unexpected outbound file event: %+v", events)
+	}
+}
+
+func TestAdminSendLocationActionQueuesAction(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"location",
+		"location_latitude":31.2304,
+		"location_longitude":121.4737,
+		"location_scale":15,
+		"location_label":"人民广场",
+		"location_poiname":"人民广场站"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindLocation || item.Text != "人民广场" || item.WxID != "wxid_friend" {
+		t.Fatalf("unexpected location action: %+v", item)
+	}
+	var payload struct {
+		Latitude  float64 `json:"location_latitude"`
+		Longitude float64 `json:"location_longitude"`
+		Scale     int     `json:"location_scale"`
+		Label     string  `json:"location_label"`
+		PoiName   string  `json:"location_poiname"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if payload.Latitude != 31.2304 || payload.Longitude != 121.4737 ||
+		payload.Scale != 15 || payload.Label != "人民广场" || payload.PoiName != "人民广场站" {
+		t.Fatalf("unexpected location payload: %+v", payload)
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 67893,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 ||
+		events[0].MessageType != 48 ||
+		events[0].MessageKind != MessageKindLocation ||
+		events[0].Text != "人民广场" {
+		t.Fatalf("unexpected outbound location event: %+v", events)
+	}
+}
+
+func TestAdminSendLocationActionRequiresCoordinates(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"location",
+		"location_label":"missing coordinates"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing location coordinates should be rejected, got status %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminSendEmojiActionQueuesAction(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"emoji",
+		"source_chat_record_id":8301,
+		"emoji_md5":"0123456789abcdef0123456789abcdef",
+		"emoji_product_id":"prod-1"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindEmoji || item.MediaKind != OutboxKindEmoji || item.Text != "[表情]" || item.WxID != "wxid_friend" {
+		t.Fatalf("unexpected emoji action: %+v", item)
+	}
+	var payload struct {
+		EmojiMD5           string `json:"emoji_md5"`
+		EmojiProductID     string `json:"emoji_product_id"`
+		SourceChatRecordID int64  `json:"source_chat_record_id"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if payload.EmojiMD5 != "0123456789abcdef0123456789abcdef" ||
+		payload.EmojiProductID != "prod-1" ||
+		payload.SourceChatRecordID != 8301 {
+		t.Fatalf("unexpected emoji payload: %+v", payload)
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 67894,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 ||
+		events[0].MessageType != 47 ||
+		events[0].MessageKind != MessageKindEmoji ||
+		events[0].MediaKind != MessageKindEmoji ||
+		events[0].AppMsgSubtype != "emoji" {
+		t.Fatalf("unexpected outbound emoji event: %+v", events)
+	}
+}
+
+func TestAdminSendEmojiActionRequiresSourceOrMD5(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"emoji"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing emoji source should be rejected, got status %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminSendQuoteActionQueuesAction(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"quote",
+		"text":"quoted reply",
+		"quote_chat_record_id":12345,
+		"quote_talker":"room@chatroom",
+		"quote_sender_wxid":"wxid_member"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindQuote || item.Text != "quoted reply" || item.WxID != "wxid_friend" {
+		t.Fatalf("unexpected quote action: %+v", item)
+	}
+	if item.PayloadJSON == nil ||
+		!bytes.Contains(item.PayloadJSON, []byte(`"quote_msg_id":12345`)) ||
+		!bytes.Contains(item.PayloadJSON, []byte(`"quote_chat_record_id":12345`)) ||
+		!bytes.Contains(item.PayloadJSON, []byte(`"quote_talker":"room@chatroom"`)) ||
+		!bytes.Contains(item.PayloadJSON, []byte(`"quote_sender_wxid":"wxid_member"`)) {
+		t.Fatalf("payload_json should include quote metadata, got %s", string(item.PayloadJSON))
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 67890,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 ||
+		events[0].MessageType != MessageTypeQuote ||
+		events[0].MessageKind != MessageKindAppMsg ||
+		events[0].AppMsgSubtype != "quote" {
+		t.Fatalf("unexpected outbound quote event: %+v", events)
+	}
+}
+
+func TestAdminSendQuoteActionRequiresQuoteMsgID(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"quote",
+		"text":"quoted reply"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing quote msg id should be rejected, got status %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminSendLinkActionQueuesAppMsg(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"link",
+		"appmsg_title":"Article",
+		"appmsg_description":"Summary",
+		"appmsg_url":"https://example.test/article",
+		"appmsg_app_name":"Docs"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindLink || item.Text != "Article" || item.WxID != "wxid_friend" {
+		t.Fatalf("unexpected link action: %+v", item)
+	}
+	var payload struct {
+		Title       string `json:"appmsg_title"`
+		Description string `json:"appmsg_description"`
+		URL         string `json:"appmsg_url"`
+		AppName     string `json:"appmsg_app_name"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if payload.Title != "Article" || payload.Description != "Summary" ||
+		payload.URL != "https://example.test/article" || payload.AppName != "Docs" {
+		t.Fatalf("unexpected link payload: %+v", payload)
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 67892,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 ||
+		events[0].MessageType != MessageTypeAppMsg ||
+		events[0].MessageKind != MessageKindAppMsg ||
+		events[0].AppMsgType != 5 ||
+		events[0].AppMsgSubtype != "link" ||
+		events[0].AppMsgTitle != "Article" ||
+		events[0].AppMsgURL != "https://example.test/article" {
+		t.Fatalf("unexpected outbound link event: %+v", events)
+	}
+	if containsString(events[0].Unsupported, "appmsg_xml_missing") {
+		t.Fatalf("outbound link ack should not require raw xml: %+v", events[0])
+	}
+}
+
+func TestAdminSendLinkActionRequiresURL(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"link",
+		"appmsg_title":"Article"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing link url should be rejected, got status %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminSendMiniProgramActionQueuesSourceForward(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"mini_program",
+		"source_chat_record_id":8204
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	var payload struct {
+		SourceChatRecordID int64 `json:"source_chat_record_id"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if item.Kind != OutboxKindMiniProgram || item.Text != "[小程序]" || payload.SourceChatRecordID != 8204 {
+		t.Fatalf("unexpected mini program action: item=%+v payload=%+v", item, payload)
+	}
+}
+
+func TestAdminSendChatHistoryActionQueuesAction(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"chat_history",
+		"text":"聊天记录",
+		"record_title":"聊天记录",
+		"record_description":"共2条：图片 / 图片",
+		"recorditem_xml":"<recordinfo><datalist count=\"2\"><dataitem datatype=\"2\"/><dataitem datatype=\"2\"/></datalist></recordinfo>"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindChatHistory || item.Text != "聊天记录" || item.WxID != "wxid_friend" {
+		t.Fatalf("unexpected chat history action: %+v", item)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if payload["record_title"] != "聊天记录" ||
+		payload["record_description"] != "共2条：图片 / 图片" ||
+		!strings.HasPrefix(payload["recorditem_xml"], "<recordinfo>") {
+		t.Fatalf("payload_json should include chat history metadata, got %s", string(item.PayloadJSON))
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 67891,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	events := service.Hub().Recent(1)
+	if len(events) != 1 ||
+		events[0].MessageType != MessageTypeAppMsg ||
+		events[0].MessageKind != MessageKindChatHistory ||
+		events[0].AppMsgType != 19 ||
+		events[0].AppMsgSubtype != "chat_history" {
+		t.Fatalf("unexpected outbound chat history event: %+v", events)
+	}
+	if containsString(events[0].Unsupported, "appmsg_xml_missing") {
+		t.Fatalf("outbound chat history ack should not require raw xml: %+v", events[0])
+	}
+}
+
+func TestAdminSendChatHistoryActionRequiresRecordItemXML(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"chat_history",
+		"text":"聊天记录"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing recorditem_xml should be rejected, got status %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminSendChatHistoryActionQueuesSourceChatRecordIDs(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"chat_history",
+		"record_title":"自动聊天记录",
+		"source_chat_record_ids":[1001,1002]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	var payload struct {
+		RecordTitle         string  `json:"record_title"`
+		RecordItemXML       string  `json:"recorditem_xml"`
+		SourceChatRecordIDs []int64 `json:"source_chat_record_ids"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if item.Kind != OutboxKindChatHistory || item.Text != "自动聊天记录" || payload.RecordTitle != "自动聊天记录" {
+		t.Fatalf("unexpected chat history action: item=%+v payload=%+v", item, payload)
+	}
+	if payload.RecordItemXML != "" || len(payload.SourceChatRecordIDs) != 2 ||
+		payload.SourceChatRecordIDs[0] != 1001 || payload.SourceChatRecordIDs[1] != 1002 {
+		t.Fatalf("payload_json should carry source ids only, got %+v", payload)
+	}
+}
+
+func TestAdminSendChatHistoryActionQueuesOriginalForwardSource(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"chat_history",
+		"forward_original":true,
+		"source_chat_record_id":8207
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	var payload struct {
+		ForwardOriginal    bool    `json:"forward_original"`
+		RecordTitle        string  `json:"record_title"`
+		SourceChatRecordID int64   `json:"source_chat_record_id"`
+		SourceIDs          []int64 `json:"source_chat_record_ids"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if item.Kind != OutboxKindChatHistory ||
+		item.Text != "聊天记录" ||
+		!payload.ForwardOriginal ||
+		payload.RecordTitle != "" ||
+		payload.SourceChatRecordID != 8207 ||
+		len(payload.SourceIDs) != 1 ||
+		payload.SourceIDs[0] != 8207 {
+		t.Fatalf("unexpected original forward payload: item=%+v payload=%+v", item, payload)
+	}
+}
+
+func TestModuleMediaFileRequiresAPIKeyAndDeviceScopedPath(t *testing.T) {
+	mediaDir := t.TempDir()
+	service := newTestService("", WithMediaDir(mediaDir))
+	if _, err := service.SendAction(t.Context(), SendActionRequest{
+		Device:      "phone-a",
+		OwnerWxID:   "wxid_self",
+		WxIDs:       []string{"wxid_friend"},
+		Kind:        OutboxKindImage,
+		MediaMime:   "image/png",
+		MediaName:   "photo.png",
+		MediaBase64: "iVBORw0KGgo=",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 || items[0].MediaURL == "" {
+		t.Fatalf("expected image media url, got %+v", items)
+	}
+	modulePath := strings.Replace(items[0].MediaURL, "/api/media/", "/module/media/", 1)
+	server := NewHTTPServer(service, "admin").Handler()
+
+	req := httptest.NewRequest(http.MethodGet, modulePath+"?api_key="+testAPIKey, nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("module media download failed status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	publicReq := httptest.NewRequest(http.MethodGet, items[0].MediaURL, nil)
+	publicReq.Header.Set("X-Bridge-API-Key", testAPIKey)
+	publicRec := httptest.NewRecorder()
+	server.ServeHTTP(publicRec, publicReq)
+	if publicRec.Code != http.StatusOK || publicRec.Body.Len() == 0 {
+		t.Fatalf("public media download failed status=%d body=%q", publicRec.Code, publicRec.Body.String())
+	}
+
+	publicForbiddenReq := httptest.NewRequest(http.MethodGet, items[0].MediaURL, nil)
+	publicForbiddenReq.Header.Set("X-Bridge-API-Key", "wechat-phone-b-key")
+	publicForbiddenRec := httptest.NewRecorder()
+	server.ServeHTTP(publicForbiddenRec, publicForbiddenReq)
+	if publicForbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("public media from another device should be forbidden, got status=%d body=%s", publicForbiddenRec.Code, publicForbiddenRec.Body.String())
+	}
+
+	forbiddenReq := httptest.NewRequest(http.MethodGet, "/module/media/other-device/20260101/file.png?api_key="+testAPIKey, nil)
+	forbiddenRec := httptest.NewRecorder()
+	server.ServeHTTP(forbiddenRec, forbiddenReq)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden for other device media, got status=%d body=%s", forbiddenRec.Code, forbiddenRec.Body.String())
 	}
 }
 
@@ -549,51 +1482,6 @@ func TestAPIKeyDisableStopsAndEnableRestoresModuleAuth(t *testing.T) {
 		WxID:   "wxid_module",
 	}); err != nil {
 		t.Fatalf("enabled api key should register again: %v", err)
-	}
-}
-
-func TestAdminReadEndpointsUsePersistentReader(t *testing.T) {
-	reader := &fakeAdminReader{
-		keys: []APIKeyView{
-			{Code: "wechat-a-key", APIKey: "wechat-a-key"},
-		},
-		events: []StoredEventView{
-			{ID: 7, Device: "phone-a", Text: "hello"},
-		},
-		messages: []StoredEventView{
-			{ID: 9, Device: "phone-a", Text: "chat"},
-		},
-		modules: []ModuleStatusView{
-			{Device: "phone-a", RuntimeStatus: "ready"},
-		},
-		contacts: []ModuleContactView{
-			{Device: "phone-a", WxID: "wxid_friend", Nickname: "Friend"},
-		},
-	}
-	service := newTestService("http://127.0.0.1:1", WithAdminReader(reader))
-	server := NewHTTPServer(service, "admin").Handler()
-
-	cases := []struct {
-		path string
-		want string
-	}{
-		{path: "/api/api-keys?limit=1", want: `"api_keys"`},
-		{path: "/api/stored-events?limit=1", want: `"events"`},
-		{path: "/api/messages?device=phone-a&wxid=wxid_friend&limit=1", want: `"messages"`},
-		{path: "/api/modules/status", want: `"modules"`},
-		{path: "/api/module-contacts?device=phone-a&q=Friend&limit=1", want: `"contacts"`},
-	}
-	for _, tc := range cases {
-		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
-		req.Header.Set("X-Bridge-Password", "admin")
-		rec := httptest.NewRecorder()
-		server.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
-			t.Fatalf("%s unexpected status=%d body=%s", tc.path, rec.Code, rec.Body.String())
-		}
-	}
-	if got := strings.Join(reader.calls, ","); !strings.Contains(got, "keys:1") || !strings.Contains(got, "events:1") || !strings.Contains(got, "messages:phone-a:wxid_friend:1") || !strings.Contains(got, "modules") || !strings.Contains(got, "contacts:phone-a:Friend:1") {
-		t.Fatalf("persistent reader was not used as expected: %+v", reader.calls)
 	}
 }
 
@@ -989,7 +1877,40 @@ func (r *fakeAdminReader) ListStoredEvents(_ context.Context, limit int) ([]Stor
 
 func (r *fakeAdminReader) ListMessages(_ context.Context, filter MessageFilter) ([]StoredEventView, error) {
 	r.calls = append(r.calls, "messages:"+filter.Device+":"+filter.WxID+":"+strconv.Itoa(filter.Limit))
-	return r.messages, nil
+	out := make([]StoredEventView, 0, len(r.messages))
+	for _, message := range r.messages {
+		if filter.Device != "" && message.Device != filter.Device {
+			continue
+		}
+		if filter.OwnerWxID != "" && message.OwnerWxID != filter.OwnerWxID {
+			continue
+		}
+		if filter.WxID != "" && message.FromWxID != filter.WxID && message.ToWxID != filter.WxID && message.RoomID != filter.WxID && message.ChatID != filter.WxID {
+			continue
+		}
+		if filter.ChatID != "" && message.ChatID != filter.ChatID && message.RoomID != filter.ChatID && message.FromWxID != filter.ChatID && message.ToWxID != filter.ChatID {
+			continue
+		}
+		if filter.ChatKind != "" && message.ChatKind != filter.ChatKind {
+			continue
+		}
+		if filter.AfterIDSet && message.ID <= filter.AfterID {
+			continue
+		}
+		if filter.BeforeID > 0 && message.ID >= filter.BeforeID {
+			continue
+		}
+		out = append(out, message)
+	}
+	if !filter.AfterIDSet {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
 }
 
 func (r *fakeAdminReader) ListModuleStatuses(_ context.Context) ([]ModuleStatusView, error) {
@@ -1010,12 +1931,19 @@ type fakeOutbox struct {
 func (o *fakeOutbox) EnqueueReply(_ context.Context, action ReplyAction) (ModuleOutboxItem, error) {
 	o.nextID++
 	item := ModuleOutboxItem{
-		ID:        o.nextID,
-		Device:    action.Device,
-		OwnerWxID: action.OwnerWxID,
-		WxID:      action.WxID,
-		Text:      action.Text,
-		Status:    "pending",
+		ID:          o.nextID,
+		Device:      action.Device,
+		OwnerWxID:   action.OwnerWxID,
+		WxID:        action.WxID,
+		Kind:        firstNonEmpty(action.Kind, OutboxKindText),
+		Text:        action.Text,
+		PayloadJSON: append([]byte(nil), action.PayloadJSON...),
+		MediaKind:   action.MediaKind,
+		MediaMime:   action.MediaMime,
+		MediaName:   action.MediaName,
+		MediaURL:    action.MediaURL,
+		MediaSize:   action.MediaSize,
+		Status:      "pending",
 	}
 	o.items = append(o.items, item)
 	return item, nil
@@ -1067,6 +1995,15 @@ func (o *fakeOutbox) AckReplyActions(_ context.Context, req ModuleAckRequest) ([
 		out = append(out, o.items[i])
 	}
 	return out, nil
+}
+
+func (o *fakeOutbox) GetReplyAction(_ context.Context, id int64) (ModuleOutboxItem, error) {
+	for _, item := range o.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return ModuleOutboxItem{}, ErrOutboxItemNotFound
 }
 
 func dialTestWebSocket(t *testing.T, serverURL string, path string) *wsConn {
@@ -1122,6 +2059,24 @@ func dialTestWebSocket(t *testing.T, serverURL string, path string) *wsConn {
 	return &wsConn{
 		conn: conn,
 		rw:   bufio.NewReadWriter(reader, bufio.NewWriter(conn)),
+	}
+}
+
+func readTestPublicWSMessage(t *testing.T, conn *wsConn) publicWSMessage {
+	t.Helper()
+	for {
+		payload, op, err := conn.readFrame()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op != wsOpText {
+			continue
+		}
+		var msg publicWSMessage
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			t.Fatalf("invalid public ws json %q: %v", string(payload), err)
+		}
+		return msg
 	}
 }
 

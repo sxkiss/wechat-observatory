@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -27,6 +28,13 @@ func NewHTTPServer(service *Service, adminPassword string) *HTTPServer {
 func (s *HTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /docs", s.openAPIDocs)
+	mux.HandleFunc("GET /docs/", s.openAPIDocs)
+	mux.HandleFunc("GET /docs/openapi.json", s.openAPIJSON)
+	mux.HandleFunc("GET /openapi.json", s.openAPIJSON)
+	for name := range publicDocFiles {
+		mux.HandleFunc("GET /docs/"+name, s.openAPIDocFile)
+	}
 	mux.HandleFunc("GET /api/devices", s.requireAdmin(s.devices))
 	mux.HandleFunc("POST /api/devices", s.requireAdmin(s.upsertDevice))
 	mux.HandleFunc("GET /api/api-keys", s.requireAdmin(s.apiKeys))
@@ -39,12 +47,32 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/live/events", s.requireAdmin(s.liveEvents))
 	mux.HandleFunc("GET /api/modules/status", s.requireAdmin(s.moduleStatuses))
 	mux.HandleFunc("GET /api/module-contacts", s.requireAdmin(s.moduleContacts))
-	mux.HandleFunc("GET /api/media/", s.requireAdmin(s.mediaFile))
+	mux.HandleFunc("GET /api/media/", s.requirePublicAPI(s.mediaFile))
 	mux.HandleFunc("POST /api/send/text", s.requireAdmin(s.sendText))
+	mux.HandleFunc("POST /api/send/action", s.requireAdmin(s.sendAction))
+	mux.HandleFunc("POST /api/v1/messages/action", s.requirePublicAPI(s.sendV1Message("")))
+	mux.HandleFunc("POST /api/v1/messages/text", s.requirePublicAPI(s.sendV1Message(OutboxKindText)))
+	mux.HandleFunc("POST /api/v1/messages/image", s.requirePublicAPI(s.sendV1Message(OutboxKindImage)))
+	mux.HandleFunc("POST /api/v1/messages/video", s.requirePublicAPI(s.sendV1Message(OutboxKindVideo)))
+	mux.HandleFunc("POST /api/v1/messages/voice", s.requirePublicAPI(s.sendV1Message(OutboxKindVoice)))
+	mux.HandleFunc("POST /api/v1/messages/file", s.requirePublicAPI(s.sendV1Message(OutboxKindFile)))
+	mux.HandleFunc("POST /api/v1/messages/emoji", s.requirePublicAPI(s.sendV1Message(OutboxKindEmoji)))
+	mux.HandleFunc("POST /api/v1/messages/location", s.requirePublicAPI(s.sendV1Message(OutboxKindLocation)))
+	mux.HandleFunc("POST /api/v1/messages/quote", s.requirePublicAPI(s.sendV1Message(OutboxKindQuote)))
+	mux.HandleFunc("POST /api/v1/messages/link", s.requirePublicAPI(s.sendV1Message(OutboxKindLink)))
+	mux.HandleFunc("POST /api/v1/messages/mini-program", s.requirePublicAPI(s.sendV1Message(OutboxKindMiniProgram)))
+	mux.HandleFunc("POST /api/v1/messages/chat-history", s.requirePublicAPI(s.sendV1Message(OutboxKindChatHistory)))
+	mux.HandleFunc("GET /api/v1/capabilities", s.requirePublicAPI(s.publicCapabilities))
+	mux.HandleFunc("GET /api/v1/messages", s.requirePublicAPI(s.getV1Messages))
+	mux.HandleFunc("GET /api/v1/ws", s.requirePublicAPI(s.publicWebSocket))
+	mux.HandleFunc("GET /api/v1/outbox/", s.requirePublicAPI(s.getV1OutboxItem))
+	mux.HandleFunc("GET /api/v1/contacts", s.requirePublicAPI(s.moduleContacts))
+	mux.HandleFunc("GET /api/v1/modules/status", s.requirePublicAPI(s.moduleStatuses))
 	mux.HandleFunc("GET /admin", s.adminPage)
 	mux.HandleFunc("GET /admin/", s.adminPage)
 	mux.HandleFunc("POST /module/register", s.registerModule)
 	mux.HandleFunc("POST /module/contacts/snapshot", s.recordContacts)
+	mux.HandleFunc("GET /module/media/", s.moduleMediaFile)
 	mux.HandleFunc("POST /module/outbox/poll", s.pollOutbox)
 	mux.HandleFunc("POST /module/outbox/ack", s.ackOutbox)
 	mux.HandleFunc("GET /module/outbox/ws", s.outboxWebSocket)
@@ -237,6 +265,11 @@ func (s *HTTPServer) messages(w http.ResponseWriter, r *http.Request) {
 	if filter.OwnerWxID == "" && filter.Device != "" {
 		filter.OwnerWxID = s.service.deviceWxID(filter.Device)
 	}
+	var ok bool
+	filter.Device, filter.OwnerWxID, ok = s.bindPublicDeviceFilter(w, r, filter.Device, filter.OwnerWxID)
+	if !ok {
+		return
+	}
 	messages, err := reader.ListMessages(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "admin_read_failed", err.Error())
@@ -290,10 +323,11 @@ func (s *HTTPServer) moduleStatuses(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "admin_read_failed", err.Error())
 			return
 		}
+		statuses = filterPublicModuleStatuses(r, statuses)
 		writeJSON(w, http.StatusOK, map[string]any{"modules": statuses})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"modules": s.moduleStatusViews()})
+	writeJSON(w, http.StatusOK, map[string]any{"modules": filterPublicModuleStatuses(r, s.moduleStatusViews())})
 }
 
 func (s *HTTPServer) moduleContacts(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +341,12 @@ func (s *HTTPServer) moduleContacts(w http.ResponseWriter, r *http.Request) {
 		OwnerWxID:      strings.TrimSpace(r.URL.Query().Get("owner_wxid")),
 		Query:          strings.TrimSpace(r.URL.Query().Get("q")),
 		IncludeDeleted: parseBoolQuery(r.URL.Query().Get("include_deleted")),
-		Limit:          queryLimit(r, 100),
+		Limit:          queryLimit(r, 500),
+	}
+	var ok bool
+	filter.Device, filter.OwnerWxID, ok = s.bindPublicDeviceFilter(w, r, filter.Device, filter.OwnerWxID)
+	if !ok {
+		return
 	}
 	contacts, err := reader.ListModuleContacts(r.Context(), filter)
 	if err != nil {
@@ -340,6 +379,7 @@ func (s *HTTPServer) moduleStatusViews() []ModuleStatusView {
 }
 
 func (s *HTTPServer) sendText(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
 	var req SendTextRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
@@ -355,6 +395,25 @@ func (s *HTTPServer) sendText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chat_record_id": recordID})
+}
+
+func (s *HTTPServer) sendAction(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
+	var req SendActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if strings.TrimSpace(req.OwnerWxID) == "" {
+		writeError(w, http.StatusBadRequest, "owner_wxid_required", "owner_wxid is required for admin sends")
+		return
+	}
+	recordID, err := s.service.SendAction(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "send_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chat_record_id": recordID, "outbox_id": recordID})
 }
 
 func (s *HTTPServer) registerModule(w http.ResponseWriter, r *http.Request) {
@@ -436,6 +495,57 @@ func (s *HTTPServer) ingestMessageFrom(provider string) http.HandlerFunc {
 
 func (s *HTTPServer) mediaFile(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(r.URL.Path, "/api/media/")
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		writeError(w, http.StatusBadRequest, "invalid_media_path", "media path is required")
+		return
+	}
+	if !publicMediaPathAllowed(r.Context(), rel) {
+		writeError(w, http.StatusForbidden, "media_forbidden", "media path does not belong to this device")
+		return
+	}
+	fullPath, err := s.service.MediaFilePath(rel)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_media_path", err.Error())
+		return
+	}
+	if _, err := os.Stat(fullPath); err != nil {
+		writeError(w, http.StatusNotFound, "media_not_found", "media file not found")
+		return
+	}
+	http.ServeFile(w, r, filepath.Clean(fullPath))
+}
+
+func publicMediaPathAllowed(ctx context.Context, rel string) bool {
+	auth, ok := publicAPIAuthFromContext(ctx)
+	if !ok || auth.Device == "" {
+		return true
+	}
+	deviceRoot := safePathPart(auth.Device)
+	return rel == deviceRoot || strings.HasPrefix(rel, deviceRoot+"/")
+}
+
+func (s *HTTPServer) moduleMediaFile(w http.ResponseWriter, r *http.Request) {
+	apiKey := strings.TrimSpace(r.URL.Query().Get("api_key"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(r.Header.Get("X-Bridge-API-Key"))
+	}
+	auth, err := s.service.authorizeModuleAPIKey(apiKey)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", err.Error())
+		return
+	}
+	rel := strings.TrimPrefix(r.URL.Path, "/module/media/")
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		writeError(w, http.StatusBadRequest, "invalid_media_path", "media path is required")
+		return
+	}
+	deviceRoot := safePathPart(auth.Device)
+	if rel != deviceRoot && !strings.HasPrefix(rel, deviceRoot+"/") {
+		writeError(w, http.StatusForbidden, "media_forbidden", "media path does not belong to this device")
+		return
+	}
 	fullPath, err := s.service.MediaFilePath(rel)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_media_path", err.Error())
@@ -450,16 +560,109 @@ func (s *HTTPServer) mediaFile(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		got := strings.TrimSpace(r.Header.Get("X-Bridge-Password"))
-		if got == "" {
-			got = strings.TrimSpace(r.URL.Query().Get("password"))
-		}
-		if got != s.adminPass {
+		if !s.adminPasswordOK(r) {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid admin password")
 			return
 		}
 		next(w, r)
 	}
+}
+
+type publicAPIAuth struct {
+	Admin  bool
+	APIKey string
+	Device string
+}
+
+type publicAPIAuthContextKey struct{}
+
+func (s *HTTPServer) requirePublicAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.adminPasswordOK(r) {
+			ctx := context.WithValue(r.Context(), publicAPIAuthContextKey{}, publicAPIAuth{Admin: true})
+			next(w, r.WithContext(ctx))
+			return
+		}
+
+		apiKey := publicAPIKeyFromRequest(r)
+		if apiKey == "" {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "admin password or API key is required")
+			return
+		}
+		auth, err := s.service.authorizeModuleAPIKey(apiKey)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid API key")
+			return
+		}
+		ctx := context.WithValue(r.Context(), publicAPIAuthContextKey{}, publicAPIAuth{
+			APIKey: firstNonEmpty(auth.Key.Code, apiKey),
+			Device: auth.Device,
+		})
+		next(w, r.WithContext(ctx))
+	}
+}
+
+func (s *HTTPServer) adminPasswordOK(r *http.Request) bool {
+	got := strings.TrimSpace(r.Header.Get("X-Bridge-Password"))
+	if got == "" {
+		got = strings.TrimSpace(r.URL.Query().Get("password"))
+	}
+	return got == s.adminPass
+}
+
+func publicAPIAuthFromContext(ctx context.Context) (publicAPIAuth, bool) {
+	auth, ok := ctx.Value(publicAPIAuthContextKey{}).(publicAPIAuth)
+	return auth, ok
+}
+
+func publicAPIKeyFromRequest(r *http.Request) string {
+	if apiKey := strings.TrimSpace(r.Header.Get("X-Bridge-API-Key")); apiKey != "" {
+		return apiKey
+	}
+	if apiKey := strings.TrimSpace(r.URL.Query().Get("api_key")); apiKey != "" {
+		return apiKey
+	}
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return strings.TrimSpace(auth[len("bearer "):])
+	}
+	return ""
+}
+
+func (s *HTTPServer) bindPublicDeviceFilter(w http.ResponseWriter, r *http.Request, device string, ownerWxID string) (string, string, bool) {
+	auth, ok := publicAPIAuthFromContext(r.Context())
+	if !ok || auth.Device == "" {
+		return device, ownerWxID, true
+	}
+	if device != "" && device != auth.Device {
+		writeError(w, http.StatusForbidden, "device_forbidden", "API key cannot access this device")
+		return "", "", false
+	}
+	currentOwnerWxID := s.service.deviceWxID(auth.Device)
+	if ownerWxID != "" && currentOwnerWxID != "" && ownerWxID != currentOwnerWxID {
+		writeError(w, http.StatusForbidden, "owner_wxid_forbidden", "API key cannot access this owner_wxid")
+		return "", "", false
+	}
+	return auth.Device, firstNonEmpty(ownerWxID, currentOwnerWxID), true
+}
+
+func publicAuthCanAccessDevice(ctx context.Context, device string) bool {
+	auth, ok := publicAPIAuthFromContext(ctx)
+	return !ok || auth.Device == "" || auth.Device == device
+}
+
+func filterPublicModuleStatuses(r *http.Request, statuses []ModuleStatusView) []ModuleStatusView {
+	auth, ok := publicAPIAuthFromContext(r.Context())
+	if !ok || auth.Device == "" {
+		return statuses
+	}
+	out := make([]ModuleStatusView, 0, len(statuses))
+	for _, status := range statuses {
+		if status.Device == auth.Device {
+			out = append(out, status)
+		}
+	}
+	return out
 }
 
 func queryLimit(r *http.Request, fallback int) int {

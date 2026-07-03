@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -313,6 +315,20 @@ func (s *Service) SendText(ctx context.Context, req SendTextRequest) (int64, err
 	if err != nil {
 		return 0, err
 	}
+	return s.SendAction(ctx, SendActionRequest{
+		Device:    req.Device,
+		OwnerWxID: req.OwnerWxID,
+		WxIDs:     req.WxIDs,
+		Kind:      OutboxKindText,
+		Text:      req.Text,
+	})
+}
+
+func (s *Service) SendAction(ctx context.Context, req SendActionRequest) (int64, error) {
+	req, err := req.Validate(s.cfg.DefaultDevice)
+	if err != nil {
+		return 0, err
+	}
 	if _, ok := s.Device(req.Device); !ok {
 		return 0, fmt.Errorf("unknown device %q", req.Device)
 	}
@@ -320,13 +336,30 @@ func (s *Service) SendText(ctx context.Context, req SendTextRequest) (int64, err
 	if req.OwnerWxID != "" && req.OwnerWxID != ownerWxID {
 		return 0, fmt.Errorf("send owner wxid %q is not current device wxid", req.OwnerWxID)
 	}
+	if isMediaOutboxKind(req.Kind) {
+		req, err = s.prepareMediaAction(req, ownerWxID)
+		if err != nil {
+			return 0, err
+		}
+	}
+	payloadJSON, err := actionPayloadJSON(req)
+	if err != nil {
+		return 0, err
+	}
 	firstID := int64(0)
 	for _, wxid := range req.WxIDs {
 		item, err := s.outbox.EnqueueReply(ctx, ReplyAction{
-			Device:    req.Device,
-			OwnerWxID: ownerWxID,
-			WxID:      wxid,
-			Text:      req.Text,
+			Device:      req.Device,
+			OwnerWxID:   ownerWxID,
+			WxID:        wxid,
+			Kind:        req.Kind,
+			Text:        req.Text,
+			PayloadJSON: payloadJSON,
+			MediaKind:   req.MediaKind,
+			MediaMime:   req.MediaMime,
+			MediaName:   req.MediaName,
+			MediaURL:    req.MediaURL,
+			MediaSize:   req.MediaSize,
 		})
 		if err != nil {
 			return 0, err
@@ -337,6 +370,253 @@ func (s *Service) SendText(ctx context.Context, req SendTextRequest) (int64, err
 	}
 	s.notifyOutbox(req.Device)
 	return firstID, nil
+}
+
+func (s *Service) OutboxItem(ctx context.Context, id int64) (ModuleOutboxItem, error) {
+	if id <= 0 {
+		return ModuleOutboxItem{}, ErrOutboxItemNotFound
+	}
+	return s.outbox.GetReplyAction(ctx, id)
+}
+
+func (s *Service) prepareMediaAction(req SendActionRequest, ownerWxID string) (SendActionRequest, error) {
+	if req.Text == "" {
+		req.Text = defaultOutboxMediaText(req.Kind)
+	}
+	req.MediaKind = req.Kind
+	if req.MediaBase64 != "" {
+		stored, err := s.StoreMediaAttachment(MessageEvent{
+			Device:      req.Device,
+			OwnerWxID:   ownerWxID,
+			Text:        req.Text,
+			MessageType: outboundMessageType(ModuleOutboxItem{Kind: req.Kind, MediaKind: req.MediaKind}),
+			MediaKind:   req.MediaKind,
+			MediaMime:   req.MediaMime,
+			MediaName:   req.MediaName,
+			MediaBase64: req.MediaBase64,
+			CreateTime:  time.Now().Unix(),
+			Direction:   DirectionSent,
+		})
+		if err != nil {
+			return req, err
+		}
+		req.MediaMime = stored.MediaMime
+		req.MediaName = stored.MediaName
+		req.MediaURL = stored.MediaURL
+		req.MediaSize = stored.MediaSize
+		req.MediaBase64 = ""
+	}
+	if req.MediaURL == "" {
+		return req, fmt.Errorf("media_url is required")
+	}
+	fullPath, err := s.MediaFilePath(req.MediaURL)
+	if err != nil {
+		return req, err
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return req, fmt.Errorf("media file not found")
+	}
+	if info.Size() <= 0 {
+		return req, fmt.Errorf("media file is empty")
+	}
+	if req.MediaSize <= 0 {
+		req.MediaSize = info.Size()
+	}
+	return req, nil
+}
+
+func actionPayloadJSON(req SendActionRequest) (json.RawMessage, error) {
+	payload := map[string]any{
+		"kind": req.Kind,
+	}
+	if req.Text != "" {
+		payload["text"] = req.Text
+	}
+	if req.MediaKind != "" {
+		payload["media_kind"] = req.MediaKind
+	}
+	if req.MediaMime != "" {
+		payload["media_mime"] = req.MediaMime
+	}
+	if req.MediaName != "" {
+		payload["media_name"] = req.MediaName
+	}
+	if req.MediaURL != "" {
+		payload["media_url"] = req.MediaURL
+	}
+	if req.MediaSize > 0 {
+		payload["media_size"] = req.MediaSize
+	}
+	if req.MediaDurationMS > 0 {
+		payload["media_duration_ms"] = req.MediaDurationMS
+		payload["duration_ms"] = req.MediaDurationMS
+	}
+	if req.LocationLatitude != nil {
+		payload["location_latitude"] = *req.LocationLatitude
+	}
+	if req.LocationLongitude != nil {
+		payload["location_longitude"] = *req.LocationLongitude
+	}
+	if req.LocationScale > 0 {
+		payload["location_scale"] = req.LocationScale
+	}
+	if req.LocationLabel != "" {
+		payload["location_label"] = req.LocationLabel
+	}
+	if req.LocationPoiName != "" {
+		payload["location_poiname"] = req.LocationPoiName
+	}
+	if req.LocationInfoURL != "" {
+		payload["location_info_url"] = req.LocationInfoURL
+	}
+	if req.LocationPoiID != "" {
+		payload["location_poi_id"] = req.LocationPoiID
+	}
+	if req.LocationFromPoiList {
+		payload["location_from_poi_list"] = req.LocationFromPoiList
+	}
+	if req.LocationPoiTips != "" {
+		payload["location_poi_category_tips"] = req.LocationPoiTips
+	}
+	if req.QuoteMsgID > 0 {
+		payload["quote_msg_id"] = req.QuoteMsgID
+		payload["quote_chat_record_id"] = req.QuoteChatRecordID
+	}
+	if req.QuoteTalker != "" {
+		payload["quote_talker"] = req.QuoteTalker
+	}
+	if req.QuoteSenderWxID != "" {
+		payload["quote_sender_wxid"] = req.QuoteSenderWxID
+	}
+	if req.AppMsgTitle != "" {
+		payload["appmsg_title"] = req.AppMsgTitle
+	}
+	if req.AppMsgDescription != "" {
+		payload["appmsg_description"] = req.AppMsgDescription
+	}
+	if req.AppMsgURL != "" {
+		payload["appmsg_url"] = req.AppMsgURL
+	}
+	if req.AppMsgAppName != "" {
+		payload["appmsg_app_name"] = req.AppMsgAppName
+	}
+	if req.AppMsgThumbURL != "" {
+		payload["appmsg_thumb_url"] = req.AppMsgThumbURL
+	}
+	if req.MiniProgramUsername != "" {
+		payload["mini_program_username"] = req.MiniProgramUsername
+	}
+	if req.MiniProgramPagePath != "" {
+		payload["mini_program_page_path"] = req.MiniProgramPagePath
+	}
+	if req.MiniProgramAppID != "" {
+		payload["mini_program_appid"] = req.MiniProgramAppID
+	}
+	if req.MiniProgramIconURL != "" {
+		payload["mini_program_icon_url"] = req.MiniProgramIconURL
+	}
+	if req.MiniProgramVersion > 0 {
+		payload["mini_program_version"] = req.MiniProgramVersion
+	}
+	if req.MiniProgramType > 0 {
+		payload["mini_program_type"] = req.MiniProgramType
+	}
+	if req.EmojiMD5 != "" {
+		payload["emoji_md5"] = req.EmojiMD5
+	}
+	if req.EmojiProductID != "" {
+		payload["emoji_product_id"] = req.EmojiProductID
+	}
+	if req.RecordTitle != "" {
+		payload["record_title"] = req.RecordTitle
+	}
+	if req.RecordDescription != "" {
+		payload["record_description"] = req.RecordDescription
+	}
+	if req.RecordItemXML != "" {
+		payload["recorditem_xml"] = req.RecordItemXML
+	}
+	if req.ForwardOriginal {
+		payload["forward_original"] = req.ForwardOriginal
+	}
+	if req.SourceChatRecordID > 0 {
+		payload["source_chat_record_id"] = req.SourceChatRecordID
+	}
+	if len(req.SourceChatRecordIDs) > 0 {
+		payload["source_chat_record_ids"] = req.SourceChatRecordIDs
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+type chatHistoryOutboxPayload struct {
+	RecordTitle       string `json:"record_title"`
+	RecordDescription string `json:"record_description"`
+	RecordItemXML     string `json:"recorditem_xml"`
+}
+
+type appMsgOutboxPayload struct {
+	AppMsgTitle         string `json:"appmsg_title"`
+	AppMsgDescription   string `json:"appmsg_description"`
+	AppMsgURL           string `json:"appmsg_url"`
+	AppMsgAppName       string `json:"appmsg_app_name"`
+	MiniProgramUsername string `json:"mini_program_username"`
+	MiniProgramPagePath string `json:"mini_program_page_path"`
+	MiniProgramAppID    string `json:"mini_program_appid"`
+}
+
+type locationOutboxPayload struct {
+	LocationLabel   string `json:"location_label"`
+	LocationPoiName string `json:"location_poiname"`
+}
+
+func appMsgPayloadFromRaw(raw json.RawMessage) appMsgOutboxPayload {
+	if len(raw) == 0 {
+		return appMsgOutboxPayload{}
+	}
+	var payload appMsgOutboxPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return appMsgOutboxPayload{}
+	}
+	payload.AppMsgTitle = strings.TrimSpace(payload.AppMsgTitle)
+	payload.AppMsgDescription = strings.TrimSpace(payload.AppMsgDescription)
+	payload.AppMsgURL = strings.TrimSpace(payload.AppMsgURL)
+	payload.AppMsgAppName = strings.TrimSpace(payload.AppMsgAppName)
+	payload.MiniProgramUsername = strings.TrimSpace(payload.MiniProgramUsername)
+	payload.MiniProgramPagePath = strings.TrimSpace(payload.MiniProgramPagePath)
+	payload.MiniProgramAppID = strings.TrimSpace(payload.MiniProgramAppID)
+	return payload
+}
+
+func chatHistoryPayloadFromRaw(raw json.RawMessage) chatHistoryOutboxPayload {
+	if len(raw) == 0 {
+		return chatHistoryOutboxPayload{}
+	}
+	var payload chatHistoryOutboxPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return chatHistoryOutboxPayload{}
+	}
+	payload.RecordTitle = strings.TrimSpace(payload.RecordTitle)
+	payload.RecordDescription = strings.TrimSpace(payload.RecordDescription)
+	payload.RecordItemXML = strings.TrimSpace(payload.RecordItemXML)
+	return payload
+}
+
+func locationPayloadFromRaw(raw json.RawMessage) locationOutboxPayload {
+	if len(raw) == 0 {
+		return locationOutboxPayload{}
+	}
+	var payload locationOutboxPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return locationOutboxPayload{}
+	}
+	payload.LocationLabel = strings.TrimSpace(payload.LocationLabel)
+	payload.LocationPoiName = strings.TrimSpace(payload.LocationPoiName)
+	return payload
 }
 
 func (s *Service) PollOutbox(ctx context.Context, req ModulePollRequest) ([]ModuleOutboxItem, error) {
@@ -410,25 +690,244 @@ func (s *Service) AckOutbox(ctx context.Context, req ModuleAckRequest) ([]Module
 			recordID = s.nextRecordID()
 		}
 		event := MessageEvent{
-			ID:           strconv.FormatInt(recordID, 10),
-			EventID:      recordID,
-			ChatRecordID: recordID,
-			Device:       item.Device,
-			OwnerWxID:    firstNonEmpty(item.OwnerWxID, s.deviceWxID(item.Device)),
-			From:         s.deviceWxID(item.Device),
-			To:           item.WxID,
-			Text:         item.Text,
-			MessageType:  1,
-			Direction:    DirectionSent,
-			CreateTime:   time.Now().Unix(),
-			RawProvider:  RawProviderModuleAck,
-		}.Normalize()
+			ID:                strconv.FormatInt(recordID, 10),
+			EventID:           recordID,
+			ChatRecordID:      recordID,
+			Device:            item.Device,
+			OwnerWxID:         firstNonEmpty(item.OwnerWxID, s.deviceWxID(item.Device)),
+			From:              s.deviceWxID(item.Device),
+			To:                item.WxID,
+			Text:              outboundText(item),
+			MessageType:       outboundMessageType(item),
+			MediaKind:         item.MediaKind,
+			MediaMime:         item.MediaMime,
+			MediaName:         item.MediaName,
+			MediaURL:          item.MediaURL,
+			MediaSize:         item.MediaSize,
+			AppMsgType:        outboundAppMsgType(item),
+			AppMsgSubtype:     outboundAppMsgSubtype(item),
+			AppMsgTitle:       outboundAppMsgTitle(item),
+			AppMsgDescription: outboundAppMsgDescription(item),
+			AppMsgURL:         outboundAppMsgURL(item),
+			AppMsgFileName:    outboundAppMsgFileName(item),
+			AppMsgAppName:     outboundAppMsgAppName(item),
+			Direction:         DirectionSent,
+			CreateTime:        time.Now().Unix(),
+			RawProvider:       RawProviderModuleAck,
+		}
+		if isChatHistoryOutboxItem(item) {
+			event.MessageKind = MessageKindChatHistory
+			event.Evidence = appendUnique(event.Evidence, "message.type=49", "outbox.kind=chat_history")
+			if event.Text == "" {
+				event.Text = appMsgDisplayText(event)
+			}
+		} else if isLinkOutboxItem(item) || isMiniProgramOutboxItem(item) {
+			event.MessageKind = MessageKindAppMsg
+			event.Evidence = appendUnique(event.Evidence, "message.type=49", "outbox.kind="+item.Kind)
+			if event.Text == "" {
+				event.Text = appMsgDisplayText(event)
+			}
+		} else {
+			event = event.Normalize()
+		}
 		s.hub.Publish(event)
 		if s.persistence != nil {
 			_ = s.persistence.RecordOutboundEvent(ctx, event)
 		}
 	}
 	return items, nil
+}
+
+func outboundText(item ModuleOutboxItem) string {
+	if strings.TrimSpace(item.Text) != "" {
+		return item.Text
+	}
+	if isVideoOutboxItem(item) {
+		return defaultOutboxMediaText(OutboxKindVideo)
+	}
+	if isFileOutboxItem(item) {
+		return defaultOutboxMediaText(OutboxKindFile)
+	}
+	if isVoiceOutboxItem(item) {
+		return defaultOutboxMediaText(OutboxKindVoice)
+	}
+	if isImageOutboxItem(item) {
+		return defaultOutboxMediaText(OutboxKindImage)
+	}
+	if isEmojiOutboxItem(item) {
+		return "[表情]"
+	}
+	if isLocationOutboxItem(item) {
+		payload := locationPayloadFromRaw(item.PayloadJSON)
+		return firstNonEmpty(payload.LocationLabel, payload.LocationPoiName, "[位置]")
+	}
+	return item.Text
+}
+
+func outboundMessageType(item ModuleOutboxItem) int32 {
+	if isVideoOutboxItem(item) {
+		return 43
+	}
+	if isFileOutboxItem(item) {
+		return MessageTypeFileTransfer
+	}
+	if isVoiceOutboxItem(item) {
+		return 34
+	}
+	if isImageOutboxItem(item) {
+		return 3
+	}
+	if isEmojiOutboxItem(item) {
+		return 47
+	}
+	if isLocationOutboxItem(item) {
+		return 48
+	}
+	if isQuoteOutboxItem(item) {
+		return MessageTypeQuote
+	}
+	if isChatHistoryOutboxItem(item) || isLinkOutboxItem(item) || isMiniProgramOutboxItem(item) {
+		return MessageTypeAppMsg
+	}
+	return 1
+}
+
+func outboundAppMsgType(item ModuleOutboxItem) int32 {
+	if isChatHistoryOutboxItem(item) {
+		return 19
+	}
+	if isQuoteOutboxItem(item) {
+		return 57
+	}
+	if isLinkOutboxItem(item) {
+		return 5
+	}
+	if isMiniProgramOutboxItem(item) {
+		return 33
+	}
+	return 0
+}
+
+func outboundAppMsgSubtype(item ModuleOutboxItem) string {
+	if isFileOutboxItem(item) {
+		return "file"
+	}
+	if isQuoteOutboxItem(item) {
+		return "quote"
+	}
+	if isChatHistoryOutboxItem(item) {
+		return "chat_history"
+	}
+	if isLinkOutboxItem(item) {
+		return "link"
+	}
+	if isMiniProgramOutboxItem(item) {
+		return "mini_program"
+	}
+	return ""
+}
+
+func outboundAppMsgTitle(item ModuleOutboxItem) string {
+	if isChatHistoryOutboxItem(item) {
+		payload := chatHistoryPayloadFromRaw(item.PayloadJSON)
+		return firstNonEmpty(payload.RecordTitle, item.Text, "聊天记录")
+	}
+	if isLinkOutboxItem(item) || isMiniProgramOutboxItem(item) {
+		return firstNonEmpty(appMsgPayloadFromRaw(item.PayloadJSON).AppMsgTitle, item.Text)
+	}
+	return ""
+}
+
+func outboundAppMsgDescription(item ModuleOutboxItem) string {
+	if isChatHistoryOutboxItem(item) {
+		return chatHistoryPayloadFromRaw(item.PayloadJSON).RecordDescription
+	}
+	if isLinkOutboxItem(item) || isMiniProgramOutboxItem(item) {
+		return appMsgPayloadFromRaw(item.PayloadJSON).AppMsgDescription
+	}
+	return ""
+}
+
+func outboundAppMsgURL(item ModuleOutboxItem) string {
+	if isLinkOutboxItem(item) || isMiniProgramOutboxItem(item) {
+		return appMsgPayloadFromRaw(item.PayloadJSON).AppMsgURL
+	}
+	return ""
+}
+
+func outboundAppMsgAppName(item ModuleOutboxItem) string {
+	if isLinkOutboxItem(item) || isMiniProgramOutboxItem(item) {
+		payload := appMsgPayloadFromRaw(item.PayloadJSON)
+		return firstNonEmpty(payload.AppMsgAppName, payload.MiniProgramAppID, payload.MiniProgramUsername)
+	}
+	return ""
+}
+
+func outboundAppMsgFileName(item ModuleOutboxItem) string {
+	if isFileOutboxItem(item) {
+		return item.MediaName
+	}
+	if isChatHistoryOutboxItem(item) {
+		return outboundAppMsgTitle(item)
+	}
+	return ""
+}
+
+func isMediaOutboxKind(kind string) bool {
+	return kind == OutboxKindImage || kind == OutboxKindVideo || kind == OutboxKindVoice || kind == OutboxKindFile
+}
+
+func isImageOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindImage || item.MediaKind == OutboxKindImage
+}
+
+func isVideoOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindVideo || item.MediaKind == OutboxKindVideo
+}
+
+func isFileOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindFile || item.MediaKind == OutboxKindFile
+}
+
+func isVoiceOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindVoice || item.MediaKind == OutboxKindVoice
+}
+
+func isEmojiOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindEmoji || item.MediaKind == OutboxKindEmoji
+}
+
+func isLocationOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindLocation
+}
+
+func isQuoteOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindQuote
+}
+
+func isLinkOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindLink
+}
+
+func isMiniProgramOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindMiniProgram
+}
+
+func isChatHistoryOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindChatHistory
+}
+
+func defaultOutboxMediaText(kind string) string {
+	if kind == OutboxKindVideo {
+		return "[视频]"
+	}
+	if kind == OutboxKindFile {
+		return "[文件]"
+	}
+	if kind == OutboxKindVoice {
+		return "[语音]"
+	}
+	return "[图片]"
 }
 
 func (s *Service) RecordModuleContacts(ctx context.Context, req ModuleContactSnapshotRequest) (int, error) {
@@ -570,12 +1069,19 @@ type IngestResult struct {
 }
 
 type ReplyAction struct {
-	Device       string `json:"device"`
-	OwnerWxID    string `json:"owner_wxid,omitempty"`
-	WxID         string `json:"wxid"`
-	Text         string `json:"text"`
-	ChatRecordID int64  `json:"chat_record_id,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Device       string          `json:"device"`
+	OwnerWxID    string          `json:"owner_wxid,omitempty"`
+	WxID         string          `json:"wxid"`
+	Kind         string          `json:"kind"`
+	Text         string          `json:"text"`
+	PayloadJSON  json.RawMessage `json:"payload_json,omitempty"`
+	MediaKind    string          `json:"media_kind,omitempty"`
+	MediaMime    string          `json:"media_mime,omitempty"`
+	MediaName    string          `json:"media_name,omitempty"`
+	MediaURL     string          `json:"media_url,omitempty"`
+	MediaSize    int64           `json:"media_size,omitempty"`
+	ChatRecordID int64           `json:"chat_record_id,omitempty"`
+	Error        string          `json:"error,omitempty"`
 }
 
 func firstNonEmpty(values ...string) string {

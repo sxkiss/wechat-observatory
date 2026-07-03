@@ -1,0 +1,37 @@
+{
+  "sample_id": "quote.private.basic",
+  "kind": "quote",
+  "direction": "outbound",
+  "wechat_type": 822083633,
+  "verification": "sample-only",
+  "input": {
+    "action_kind": "quote",
+    "target": "<peer-or-room>",
+    "text": "<synthetic-reply-text>",
+    "quote_chat_record_id": "<source-local-id>",
+    "quote_talker": "<source-conversation>",
+    "quote_sender_wxid": "<source-sender>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "quote",
+    "message_type": 822083633,
+    "appmsg_subtype": "quote",
+    "evidence": [
+      "outbox.kind=quote",
+      "wechat.local_db.message.type=822083633"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "quote_sender_wxid",
+    "text",
+    "raw_xml"
+  ],
+  "needs_more_samples": [
+    "group-quote",
+    "missing-metadata-failed-ack"
+  ]
+}
+

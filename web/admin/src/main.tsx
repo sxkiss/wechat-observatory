@@ -1,15 +1,11 @@
-﻿import React from "react";
+import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
   CheckCircle2,
-  Download,
-  FileText,
   Hash,
-  ImageIcon,
   KeyRound,
   MessageCircle,
-  Mic,
   Moon,
   Paperclip,
   PauseCircle,
@@ -23,7 +19,6 @@ import {
   Trash2,
   UserRound,
   Users,
-  Video,
   Wifi,
   WifiOff
 } from "lucide-react";
@@ -37,32 +32,49 @@ import {
   openLiveEvents,
   parseLiveMessageEvent,
   setApiKeyEnabled,
+  sendAction,
   sendText,
   updateDevice
 } from "@/api";
+import {
+  RAW_PROVIDER_MODULE_ACK,
+  chatKindForContact,
+  contactKindText,
+  contactName,
+  contactSecondary,
+  formatDate,
+  formatTimeAgo,
+  hasEmojiActionInput,
+  isRoomContact,
+  messageChatId,
+  messageContactName,
+  messageIsRoom,
+  messagePreview,
+  moduleOwnerWxid,
+  parsePositiveInteger,
+  selectedChatTitle,
+  selectedSendTargetId,
+  statusText
+} from "@/adminViewModel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import type { ApiKey, LiveMessageEvent, ModuleContact, ModuleStatus, StoredMessage } from "@/types";
+import { liveEventTouchesChat, mediaActionKind } from "@/messageProtocol";
+import { SendDialog } from "@/sendDialog";
+import { SelectedMediaPreview } from "@/sendMediaPreview";
+import { MessageBubble } from "@/messageComponents";
+import { ConnectionBadge, EmptyState, MetricCard, SignalPill, StatusBadge } from "@/adminWidgets";
+import type { ApiKey, ModuleContact, ModuleStatus, StoredMessage } from "@/types";
 import "./index.css";
 
 const PASSWORD_KEY = "wgc_admin_password";
 const THEME_KEY = "wgc_admin_theme";
-const RAW_PROVIDER_MODULE_ACK = "module_ack";
 
 type ContactFilter = "all" | "direct" | "room" | "messages";
 type ThemeMode = "light" | "dark";
@@ -92,6 +104,9 @@ function App() {
   const [liveConnected, setLiveConnected] = React.useState(false);
   const [sendOpen, setSendOpen] = React.useState(false);
   const [draft, setDraft] = React.useState("");
+  const [selectedMedia, setSelectedMedia] = React.useState<File | null>(null);
+  const [emojiMd5, setEmojiMd5] = React.useState("");
+  const [emojiSourceId, setEmojiSourceId] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [sending, setSending] = React.useState(false);
   const [savingAdmin, setSavingAdmin] = React.useState(false);
@@ -172,6 +187,9 @@ function App() {
   const pendingCount = selectedModule?.pending_outbox ?? 0;
   const failedCount = selectedModule?.failed_outbox ?? 0;
   const sentCount = selectedModule?.sent_outbox ?? 0;
+  const emojiSourceChatRecordId = parsePositiveInteger(emojiSourceId);
+  const hasEmojiInput = hasEmojiActionInput(emojiMd5, emojiSourceId);
+  const canSubmitSend = Boolean(draft.trim() || selectedMedia || hasEmojiInput);
   const messageListActive = contactFilter === "messages";
   const contactQuery = messageListActive ? "" : query;
   const contactIncludeDeleted = messageListActive ? true : includeDeleted;
@@ -221,7 +239,7 @@ function App() {
         ownerWxid,
         query: contactQuery,
         includeDeleted: contactIncludeDeleted,
-        limit: 600
+        limit: 500
       });
       if (!scopeMatches(device, ownerWxid)) {
         return [] as ModuleContact[];
@@ -440,24 +458,57 @@ function App() {
       setSelectedWxid(contact.wxid);
     }
     setDraft("");
+    setSelectedMedia(null);
+    setEmojiMd5("");
+    setEmojiSourceId("");
     setSendOpen(true);
   };
 
   const submitSend = async () => {
-    if (!selectedDevice || !selectedWxid || !draft.trim()) return;
+    if (!selectedDevice || !selectedWxid || !canSubmitSend) return;
     setSending(true);
     setNotice("正在加入发送队列");
     try {
       const sentDevice = selectedDevice;
-      const sentWxid = selectedWxid;
-      await sendText({
-        password: adminPassword,
-        device: sentDevice,
-        ownerWxid: selectedOwnerWxid,
-        wxid: sentWxid,
-        text: draft.trim()
-      });
+      const sentWxid = selectedSendTargetId(selectedWxid, selectedContact);
+      if (selectedMedia) {
+        const mediaKind = mediaActionKind(selectedMedia);
+        const mediaBase64 = await readFileAsDataURL(selectedMedia);
+        await sendAction({
+          password: adminPassword,
+          device: sentDevice,
+          ownerWxid: selectedOwnerWxid,
+          wxid: sentWxid,
+          kind: mediaKind,
+          text: draft.trim(),
+          mediaBase64,
+          mediaName: selectedMedia.name,
+          mediaMime: selectedMedia.type || "application/octet-stream",
+          mediaSize: selectedMedia.size
+        });
+      } else if (hasEmojiInput) {
+        await sendAction({
+          password: adminPassword,
+          device: sentDevice,
+          ownerWxid: selectedOwnerWxid,
+          wxid: sentWxid,
+          kind: "emoji",
+          emojiMd5: emojiMd5.trim(),
+          sourceChatRecordId: emojiSourceChatRecordId
+        });
+      } else {
+        await sendText({
+          password: adminPassword,
+          device: sentDevice,
+          ownerWxid: selectedOwnerWxid,
+          wxid: sentWxid,
+          text: draft.trim()
+        });
+      }
       setDraft("");
+      setSelectedMedia(null);
+      setEmojiMd5("");
+      setEmojiSourceId("");
       setSendOpen(false);
       setNotice("消息已加入模块发送队列");
       void refreshModules().catch(() => undefined);
@@ -869,11 +920,28 @@ function App() {
                     placeholder="输入要发送到微信的文本"
                     disabled={!selectedWxid || sending}
                   />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Label
+                      htmlFor="inline-send-media"
+                      className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-xs shadow-sm hover:bg-secondary"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                      附件
+                    </Label>
+                    <Input
+                      id="inline-send-media"
+                      type="file"
+                      className="hidden"
+                      onChange={(event) => setSelectedMedia(event.target.files?.[0] ?? null)}
+                      disabled={!selectedWxid || sending}
+                    />
+                    {selectedMedia ? <SelectedMediaPreview file={selectedMedia} className="max-w-full" /> : null}
+                  </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs text-muted-foreground">
                       {pendingCount > 0 ? `待发送 ${pendingCount} 条` : failedCount > 0 ? `失败 ${failedCount} 条` : "发送队列空闲"}
                     </span>
-                    <Button onClick={() => void submitSend()} disabled={sending || !adminPassword || !selectedDevice || !selectedWxid || !draft.trim()}>
+                    <Button onClick={() => void submitSend()} disabled={sending || !adminPassword || !selectedDevice || !selectedWxid || !canSubmitSend}>
                       <Send className="h-4 w-4" />
                       {sending ? "发送中" : "加入队列"}
                     </Button>
@@ -1079,469 +1147,41 @@ function App() {
         </section>
       </main>
 
-      <Dialog open={sendOpen} onOpenChange={setSendOpen}>
-        <DialogContent onClose={() => setSendOpen(false)}>
-          <DialogHeader>
-            <DialogTitle>发送微信消息</DialogTitle>
-            <DialogDescription>{selectedChatTitle(selectedWxid, selectedContact)}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-2">
-              <Label htmlFor="send-target">发送对象</Label>
-              <Input id="send-target" value={selectedChatTitle(selectedWxid, selectedContact)} readOnly />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="send-text">消息内容</Label>
-              <Textarea
-                id="send-text"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="输入要发送到微信的文本"
-                autoFocus
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setSendOpen(false)}>
-              取消
-            </Button>
-            <Button type="button" onClick={() => void submitSend()} disabled={sending || !draft.trim()}>
-              <Send className="h-4 w-4" />
-              {sending ? "发送中" : "加入队列"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <SendDialog
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        targetTitle={selectedChatTitle(selectedWxid, selectedContact)}
+        draft={draft}
+        onDraftChange={setDraft}
+        selectedMedia={selectedMedia}
+        onSelectedMediaChange={setSelectedMedia}
+        emojiMd5={emojiMd5}
+        onEmojiMd5Change={setEmojiMd5}
+        emojiSourceId={emojiSourceId}
+        onEmojiSourceIdChange={setEmojiSourceId}
+        sending={sending}
+        canSubmit={canSubmitSend}
+        onSubmit={submitSend}
+      />
     </div>
   );
 }
 
-function MessageBubble({
-  message,
-  adminPassword,
-  contactByWxid,
-  module
-}: {
-  message: StoredMessage;
-  adminPassword: string;
-  contactByWxid: Map<string, ModuleContact>;
-  module?: ModuleStatus;
-}) {
-  const outgoing = message.direction === "sent";
-  const hasAttachment = Boolean(message.media_url || message.media_kind || mediaKindFromType(message.message_type));
-  const senderName = messageSenderName(message, contactByWxid, module);
-  return (
-    <div className={outgoing ? "flex justify-end" : "flex justify-start"}>
-      <div
-        className={
-          outgoing
-            ? "max-w-[82%] rounded-lg border border-primary/20 bg-primary px-3 py-2 text-primary-foreground shadow-sm"
-            : "max-w-[82%] rounded-lg border bg-secondary px-3 py-2 text-secondary-foreground shadow-sm"
-        }
-      >
-        <div className="mb-1 flex flex-wrap items-center gap-2 text-xs opacity-80">
-          <span>{outgoing ? "发出" : "收到"}</span>
-          <span className="font-medium">{senderName}</span>
-          {message.raw_provider ? <span>{providerText(message.raw_provider)}</span> : null}
-          {message.message_type ? <span>{messageTypeText(message.message_type)}</span> : null}
-          <span>{formatDate(message.created_at)}</span>
-        </div>
-        {message.text ? <div className="whitespace-pre-wrap break-words text-sm leading-6">{message.text}</div> : null}
-        {hasAttachment ? <MessageAttachment message={message} adminPassword={adminPassword} outgoing={outgoing} /> : null}
-      </div>
-    </div>
-  );
+function readFileAsDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("读取媒体失败"));
+    };
+    reader.onerror = () => reject(reader.error || new Error("读取媒体失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
-function MessageAttachment({
-  message,
-  adminPassword,
-  outgoing
-}: {
-  message: StoredMessage;
-  adminPassword: string;
-  outgoing: boolean;
-}) {
-  const kind = message.media_kind || mediaKindFromType(message.message_type) || "file";
-  const url = message.media_url ? mediaURL(message.media_url, adminPassword) : "";
-  const title = message.media_name || messageTypeText(message.message_type);
-  const shell = outgoing ? "border-primary-foreground/30 bg-primary-foreground/10" : "border-border bg-background/80";
-
-  if (!url) {
-    return (
-      <div className={`mt-2 rounded-md border border-dashed p-3 text-xs ${shell}`}>
-        <div className="flex items-center gap-2 font-medium">
-          {mediaIcon(kind)}
-          <span>{title}</span>
-        </div>
-        <div className="mt-1 opacity-80">模块已收到此类消息，但附件文件还没有上传。</div>
-      </div>
-    );
-  }
-
-  if (kind === "image") {
-    return (
-      <a href={url} target="_blank" rel="noreferrer" className={`mt-2 block overflow-hidden rounded-md border ${shell}`}>
-        <img src={url} alt={title} className="max-h-72 w-full object-contain" />
-      </a>
-    );
-  }
-
-  if (kind === "voice") {
-    return (
-      <div className={`mt-2 grid gap-2 rounded-md border p-3 ${shell}`}>
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Mic className="h-4 w-4" />
-          <span>{title}</span>
-        </div>
-        <audio controls preload="none" src={url} className="h-9 w-full" />
-        <MediaDownload url={url} name={title} size={message.media_size} />
-      </div>
-    );
-  }
-
-  if (kind === "video") {
-    return (
-      <div className={`mt-2 overflow-hidden rounded-md border ${shell}`}>
-        <video controls preload="metadata" src={url} className="max-h-80 w-full bg-black" />
-      </div>
-    );
-  }
-
-  return (
-    <div className={`mt-2 grid gap-2 rounded-md border p-3 text-sm ${shell}`}>
-      <div className="flex items-center gap-2 font-medium">
-        {mediaIcon(kind)}
-        <span className="truncate">{title}</span>
-      </div>
-      <MediaDownload url={url} name={title} size={message.media_size} />
-    </div>
-  );
-}
-
-function MediaDownload({ url, name, size }: { url: string; name: string; size?: number }) {
-  return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-      download={name}
-      className="inline-flex h-8 w-fit items-center gap-2 rounded-md border bg-background px-3 text-xs text-foreground shadow-sm hover:bg-secondary"
-    >
-      <Download className="h-3.5 w-3.5" />
-      下载{size ? ` · ${formatBytes(size)}` : ""}
-    </a>
-  );
-}
-
-function ConnectionBadge({ connected, enabled }: { connected: boolean; enabled: boolean }) {
-  if (!enabled) {
-    return (
-      <Badge variant="secondary">
-        <WifiOff className="mr-1 h-3.5 w-3.5" />
-        实时关闭
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant={connected ? "success" : "warning"}>
-      {connected ? <Wifi className="mr-1 h-3.5 w-3.5" /> : <WifiOff className="mr-1 h-3.5 w-3.5" />}
-      {connected ? "实时已连接" : "实时待连接"}
-    </Badge>
-  );
-}
-
-function StatusBadge({ status }: { status?: string }) {
-  if (status === "ready") {
-    return <Badge variant="success">就绪</Badge>;
-  }
-  if (status === "pending" || status === "sending") {
-    return <Badge variant="warning">{statusText(status)}</Badge>;
-  }
-  if (status === "failed" || status === "unregistered") {
-    return <Badge variant="destructive">{statusText(status)}</Badge>;
-  }
-  if (status === "disabled") {
-    return <Badge variant="secondary">{statusText(status)}</Badge>;
-  }
-  return <Badge variant="secondary">{statusText(status)}</Badge>;
-}
-
-function MetricCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
-  return (
-    <Card>
-      <CardContent className="flex min-h-[88px] items-center justify-between p-4">
-        <div className="min-w-0">
-          <div className="text-xs text-muted-foreground">{title}</div>
-          <div className="mt-1 truncate text-xl font-semibold">{value}</div>
-        </div>
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground">
-          {icon}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SignalPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-background px-2 py-2">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate text-xs font-medium">{value}</div>
-    </div>
-  );
-}
-
-function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
-    <div className="grid min-h-[120px] place-items-center rounded-lg border border-dashed bg-background/60 p-6 text-center text-sm text-muted-foreground">
-      <div className="grid justify-items-center gap-2">
-        <div className="text-muted-foreground">{icon}</div>
-        <div>{text}</div>
-      </div>
-    </div>
-  );
-}
-
-function contactName(contact: ModuleContact) {
-  if (isFileHelperContact(contact)) {
-    return contact.remark || contact.nickname || "文件传输助手";
-  }
-  const name = contact.remark || contact.nickname || contact.alias;
-  if (name) {
-    return name;
-  }
-  return isRoomContact(contact) ? "未命名群聊" : "未命名好友";
-}
-
-function contactSecondary(contact: ModuleContact) {
-  const nickname = contact.nickname && contact.nickname !== contactName(contact) ? contact.nickname : "";
-  const parts = [nickname, contact.alias].filter(Boolean);
-  return parts.join(" · ") || "-";
-}
-
-function contactKindText(contact: ModuleContact) {
-  return isRoomContact(contact) ? "群聊" : "好友";
-}
-
-function selectedChatTitle(wxid: string, contact?: ModuleContact) {
-  if (contact) {
-    return contactName(contact);
-  }
-  if (!wxid) {
-    return "未选择好友";
-  }
-  return wxid.toLowerCase().endsWith("@chatroom") ? "未收录群聊" : "未收录好友";
-}
-
-function messageChatId(message: StoredMessage) {
-  if (message.chat_id) {
-    return message.chat_id;
-  }
-  if (message.room_id) {
-    return message.room_id;
-  }
-  if (message.direction === "sent") {
-    return message.to_wxid || message.from_wxid || message.sender_wxid || "";
-  }
-  return message.from_wxid || message.sender_wxid || message.to_wxid || "";
-}
-
-function messageIsRoom(message: StoredMessage, contact?: ModuleContact) {
-  const chatId = messageChatId(message).toLowerCase();
-  return Boolean(contact?.chatroom || message.chat_kind === "room" || message.room_id || chatId.endsWith("@chatroom"));
-}
-
-function messageContactName(message: StoredMessage, contact?: ModuleContact) {
-  if (contact) {
-    return contactName(contact);
-  }
-  return messageIsRoom(message) ? "未收录群聊" : "未收录好友";
-}
-
-function messageSenderName(message: StoredMessage, contactByWxid: Map<string, ModuleContact>, module?: ModuleStatus) {
-  const outgoing = message.direction === "sent";
-  if (outgoing) {
-    return moduleSelfName(module);
-  }
-
-  const senderWxid = message.sender_wxid || "";
-  if (messageIsRoom(message) && !senderWxid) {
-    return "群聊系统消息";
-  }
-
-  const wxid = senderWxid || message.from_wxid || "";
-  const contact = wxid ? contactByWxid.get(wxid) : undefined;
-  if (contact) {
-    return contactName(contact);
-  }
-
-  if (messageIsRoom(message)) {
-    return senderWxid ? "群成员" : "群聊";
-  }
-  return wxid && wxid === moduleOwnerWxid(module) ? moduleSelfName(module) : "对方";
-}
-
-function moduleSelfName(module?: ModuleStatus) {
-  return module?.device_nickname || "我";
-}
-
-function messagePreview(message: StoredMessage, contactByWxid?: Map<string, ModuleContact>, module?: ModuleStatus) {
-  const direction = message.direction === "sent" ? "发出" : "收到";
-  const body = message.text?.trim() || message.media_name || messageTypeText(message.message_type);
-  const sender = contactByWxid ? messageSenderName(message, contactByWxid, module) : "";
-  return [direction, sender, body || "空消息"].filter(Boolean).join(" · ");
-}
-
-function isRoomContact(contact: ModuleContact) {
-  return Boolean(contact.chatroom || contact.wxid.toLowerCase().endsWith("@chatroom"));
-}
-
-function isFileHelperContact(contact: ModuleContact) {
-  return contact.wxid.toLowerCase() === "filehelper";
-}
-
-function statusText(status?: string) {
-  switch (status) {
-    case "ready":
-      return "就绪";
-    case "pending":
-      return "待发送";
-    case "sending":
-      return "发送中";
-    case "failed":
-      return "失败";
-    case "disabled":
-      return "已停用";
-    case "unregistered":
-      return "未注册";
-    default:
-      return status || "-";
-  }
-}
-
-function providerText(provider: string) {
-  switch (provider) {
-    case RAW_PROVIDER_MODULE_ACK:
-      return "模块回执";
-    case "lsposed":
-      return "LSPosed";
-    case "module":
-      return "模块";
-    default:
-      return provider;
-  }
-}
-
-function messageTypeText(type: number) {
-  switch (type) {
-    case 1:
-      return "文本";
-    case 3:
-      return "图片";
-    case 34:
-      return "语音";
-    case 43:
-      return "视频";
-    case 47:
-      return "表情";
-    case 48:
-      return "位置";
-    case 49:
-      return "链接/文件";
-    case 62:
-      return "小视频";
-    case 10000:
-      return "系统消息";
-    default:
-      return `类型 ${type}`;
-  }
-}
-
-function mediaKindFromType(type?: number) {
-  switch (type) {
-    case 3:
-      return "image";
-    case 34:
-      return "voice";
-    case 43:
-    case 62:
-      return "video";
-    case 47:
-      return "emoji";
-    case 48:
-      return "location";
-    case 49:
-      return "file";
-    default:
-      return "";
-  }
-}
-
-function mediaURL(path: string, password: string) {
-  const url = new URL(path, window.location.origin);
-  if (password) {
-    url.searchParams.set("password", password);
-  }
-  return `${url.pathname}${url.search}`;
-}
-
-function mediaIcon(kind: string) {
-  switch (kind) {
-    case "image":
-      return <ImageIcon className="h-4 w-4" />;
-    case "voice":
-      return <Mic className="h-4 w-4" />;
-    case "video":
-      return <Video className="h-4 w-4" />;
-    case "file":
-      return <Paperclip className="h-4 w-4" />;
-    default:
-      return <FileText className="h-4 w-4" />;
-  }
-}
-
-function formatBytes(value?: number) {
-  if (!value || value <= 0) {
-    return "";
-  }
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function liveEventTouchesChat(event: LiveMessageEvent, chatId: string) {
-  return [event.chat_id, event.from, event.to, event.room_id, event.sender].some((value) => value === chatId);
-}
-
-function moduleOwnerWxid(module?: ModuleStatus) {
-  return module?.device_wxid || "";
-}
-
-function chatKindForContact(wxid: string, contact?: ModuleContact) {
-  if (contact?.chatroom || wxid.toLowerCase().endsWith("@chatroom")) {
-    return "room";
-  }
-  return "direct";
-}
-
-function formatDate(value?: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function formatTimeAgo(value?: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return "刚刚";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  return date.toLocaleDateString("zh-CN");
-}
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

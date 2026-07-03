@@ -1,0 +1,30 @@
+{
+  "sample_id": "image.private.basic",
+  "kind": "image",
+  "direction": "inbound_outbound",
+  "wechat_type": 3,
+  "verification": "user-confirmed",
+  "input": {
+    "action_kind": "image",
+    "target": "<peer>",
+    "media_url": "/api/media/<device>/<date>/<file>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "image",
+    "message_type": 3,
+    "media_kind": "image",
+    "media_url_present": true,
+    "evidence": [
+      "outbox.kind=image",
+      "wechat.local_db.message.type=3"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "media_base64",
+    "media_file_bytes"
+  ]
+}
+

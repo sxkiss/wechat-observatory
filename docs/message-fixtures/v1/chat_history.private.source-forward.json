@@ -1,0 +1,37 @@
+{
+  "sample_id": "chat_history.private.source-forward",
+  "kind": "chat_history",
+  "direction": "outbound",
+  "wechat_type": 49,
+  "verification": "sample-only",
+  "input": {
+    "action_kind": "chat_history",
+    "target": "<peer>",
+    "source_chat_record_id": "<source-local-id>",
+    "forward_original": true
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "appmsg",
+    "message_type": 49,
+    "appmsg_type": 19,
+    "appmsg_subtype": "chat_history",
+    "evidence": [
+      "outbox.kind=chat_history",
+      "wechat.local_db.message.type=49",
+      "raw_xml.appmsg.type=19"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "nested_record_sender",
+    "nested_record_text",
+    "raw_xml"
+  ],
+  "needs_more_samples": [
+    "nested-record-summary",
+    "mixed-media-records"
+  ]
+}
+

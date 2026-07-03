@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,6 +70,12 @@ func (s *Store) ApplyMigrations(ctx context.Context) error {
 	if err := s.ensureMessageEventMediaColumns(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureMessageEventAppMsgColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureMessageEventLocationColumns(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureMessageEventOwnerColumns(ctx); err != nil {
 		return err
 	}
@@ -76,6 +83,9 @@ func (s *Store) ApplyMigrations(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureOutboxOwnerColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureOutboxActionColumns(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureModuleContactOwnerKey(ctx); err != nil {
@@ -103,6 +113,53 @@ func (s *Store) ensureMessageEventMediaColumns(ctx context.Context) error {
 		`ALTER TABLE bridge_message_events ADD COLUMN media_name VARCHAR(255) NULL AFTER media_mime`,
 		`ALTER TABLE bridge_message_events ADD COLUMN media_url TEXT NULL AFTER media_name`,
 		`ALTER TABLE bridge_message_events ADD COLUMN media_size BIGINT NULL AFTER media_url`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureMessageEventAppMsgColumns(ctx context.Context) error {
+	statements := []string{
+		`ALTER TABLE bridge_message_events ADD COLUMN message_kind VARCHAR(32) NULL AFTER message_type`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_type INT NULL AFTER message_kind`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_subtype VARCHAR(64) NULL AFTER appmsg_type`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_title TEXT NULL AFTER appmsg_subtype`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_description TEXT NULL AFTER appmsg_title`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_url TEXT NULL AFTER appmsg_description`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_file_name VARCHAR(255) NULL AFTER appmsg_url`,
+		`ALTER TABLE bridge_message_events ADD COLUMN appmsg_app_name VARCHAR(255) NULL AFTER appmsg_file_name`,
+		`ALTER TABLE bridge_message_events ADD COLUMN unsupported JSON NULL AFTER appmsg_app_name`,
+		`ALTER TABLE bridge_message_events ADD COLUMN evidence JSON NULL AFTER unsupported`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureMessageEventLocationColumns(ctx context.Context) error {
+	statements := []string{
+		`ALTER TABLE bridge_message_events ADD COLUMN location_latitude DOUBLE NULL AFTER evidence`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_longitude DOUBLE NULL AFTER location_latitude`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_scale INT NULL AFTER location_longitude`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_label TEXT NULL AFTER location_scale`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_poiname TEXT NULL AFTER location_label`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_info_url TEXT NULL AFTER location_poiname`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_poi_id VARCHAR(255) NULL AFTER location_info_url`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_from_poi_list BOOLEAN NULL AFTER location_poi_id`,
+		`ALTER TABLE bridge_message_events ADD COLUMN location_poi_category_tips TEXT NULL AFTER location_from_poi_list`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -152,6 +209,28 @@ func (s *Store) ensureOutboxOwnerColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) ensureOutboxActionColumns(ctx context.Context) error {
+	statements := []string{
+		`ALTER TABLE bridge_module_outbox ADD COLUMN kind VARCHAR(32) NOT NULL DEFAULT 'text' AFTER text`,
+		`ALTER TABLE bridge_module_outbox ADD COLUMN payload_json JSON NULL AFTER kind`,
+		`ALTER TABLE bridge_module_outbox ADD COLUMN media_kind VARCHAR(32) NULL AFTER payload_json`,
+		`ALTER TABLE bridge_module_outbox ADD COLUMN media_mime VARCHAR(128) NULL AFTER media_kind`,
+		`ALTER TABLE bridge_module_outbox ADD COLUMN media_name VARCHAR(255) NULL AFTER media_mime`,
+		`ALTER TABLE bridge_module_outbox ADD COLUMN media_url TEXT NULL AFTER media_name`,
+		`ALTER TABLE bridge_module_outbox ADD COLUMN media_size BIGINT NULL AFTER media_url`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return err
+		}
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE bridge_module_outbox SET kind = 'text' WHERE kind IS NULL OR kind = ''`)
+	return err
 }
 
 func (s *Store) ensureModuleContactOwnerKey(ctx context.Context) error {
@@ -221,11 +300,30 @@ func Migrations() []string {
 			from_wxid VARCHAR(191) NULL,
 			to_wxid VARCHAR(191) NULL,
 			room_id VARCHAR(191) NULL,
-			sender_wxid VARCHAR(191) NULL,
-			text TEXT NOT NULL,
-			message_type INT NOT NULL,
-			media_kind VARCHAR(32) NULL,
-			media_mime VARCHAR(128) NULL,
+				sender_wxid VARCHAR(191) NULL,
+				text TEXT NOT NULL,
+				message_type INT NOT NULL,
+				message_kind VARCHAR(32) NULL,
+				appmsg_type INT NULL,
+				appmsg_subtype VARCHAR(64) NULL,
+				appmsg_title TEXT NULL,
+				appmsg_description TEXT NULL,
+				appmsg_url TEXT NULL,
+				appmsg_file_name VARCHAR(255) NULL,
+				appmsg_app_name VARCHAR(255) NULL,
+				unsupported JSON NULL,
+				evidence JSON NULL,
+				location_latitude DOUBLE NULL,
+				location_longitude DOUBLE NULL,
+				location_scale INT NULL,
+				location_label TEXT NULL,
+				location_poiname TEXT NULL,
+				location_info_url TEXT NULL,
+				location_poi_id VARCHAR(255) NULL,
+				location_from_poi_list BOOLEAN NULL,
+				location_poi_category_tips TEXT NULL,
+				media_kind VARCHAR(32) NULL,
+				media_mime VARCHAR(128) NULL,
 			media_name VARCHAR(255) NULL,
 			media_url TEXT NULL,
 			media_size BIGINT NULL,
@@ -243,6 +341,13 @@ func Migrations() []string {
 			owner_wxid VARCHAR(191) NULL,
 			wxid VARCHAR(191) NOT NULL,
 			text TEXT NOT NULL,
+			kind VARCHAR(32) NOT NULL DEFAULT 'text',
+			payload_json JSON NULL,
+			media_kind VARCHAR(32) NULL,
+			media_mime VARCHAR(128) NULL,
+			media_name VARCHAR(255) NULL,
+			media_url TEXT NULL,
+			media_size BIGINT NULL,
 			chat_record_id BIGINT NULL,
 			status VARCHAR(32) NOT NULL DEFAULT 'pending',
 			attempt_count INT NOT NULL DEFAULT 0,
@@ -399,6 +504,61 @@ func (s *Store) RecordOutboundEvent(ctx context.Context, event bridge.MessageEve
 	return s.recordMessageEvent(ctx, event)
 }
 
+const messageEventDedupUpdateStatement = `
+	UPDATE bridge_message_events
+	SET
+		source_id = COALESCE(?, source_id),
+		event_id = COALESCE(?, event_id),
+		from_wxid = COALESCE(?, from_wxid),
+		to_wxid = COALESCE(?, to_wxid),
+		room_id = COALESCE(?, room_id),
+		sender_wxid = COALESCE(?, sender_wxid),
+			text = CASE WHEN ? <> '' THEN ? ELSE text END,
+			message_type = CASE WHEN ? > 0 THEN ? ELSE message_type END,
+			message_kind = COALESCE(?, message_kind),
+			appmsg_type = CASE WHEN ? > 0 THEN ? ELSE appmsg_type END,
+			appmsg_subtype = COALESCE(?, appmsg_subtype),
+			appmsg_title = COALESCE(?, appmsg_title),
+			appmsg_description = COALESCE(?, appmsg_description),
+			appmsg_url = COALESCE(?, appmsg_url),
+			appmsg_file_name = COALESCE(?, appmsg_file_name),
+			appmsg_app_name = COALESCE(?, appmsg_app_name),
+			unsupported = COALESCE(?, unsupported),
+			evidence = COALESCE(?, evidence),
+			location_latitude = COALESCE(?, location_latitude),
+			location_longitude = COALESCE(?, location_longitude),
+			location_scale = CASE WHEN ? > 0 THEN ? ELSE location_scale END,
+			location_label = COALESCE(?, location_label),
+			location_poiname = COALESCE(?, location_poiname),
+			location_info_url = COALESCE(?, location_info_url),
+			location_poi_id = COALESCE(?, location_poi_id),
+			location_from_poi_list = COALESCE(?, location_from_poi_list),
+			location_poi_category_tips = COALESCE(?, location_poi_category_tips),
+			media_kind = COALESCE(?, media_kind),
+			media_mime = COALESCE(?, media_mime),
+		media_name = COALESCE(?, media_name),
+		media_url = COALESCE(?, media_url),
+		media_size = CASE WHEN ? > 0 THEN ? ELSE media_size END,
+		raw_provider = CASE
+			WHEN ? THEN NULL
+			ELSE raw_provider
+		END,
+		create_time = CASE WHEN ? AND ? > 0 THEN ? ELSE create_time END
+	WHERE device = ?
+		AND owner_wxid <=> ?
+		AND direction = ?
+		AND chat_record_id = ?
+	LIMIT 1`
+
+const messageEventDedupExistsStatement = `
+	SELECT id
+	FROM bridge_message_events
+	WHERE device = ?
+		AND owner_wxid <=> ?
+		AND direction = ?
+		AND chat_record_id = ?
+	LIMIT 1`
+
 func (s *Store) RecordModuleActivity(ctx context.Context, activity bridge.ModuleActivity) error {
 	switch strings.TrimSpace(activity.Kind) {
 	case "register":
@@ -515,12 +675,22 @@ func (s *Store) RecordModuleContacts(ctx context.Context, snapshot bridge.Module
 
 func (s *Store) EnqueueReply(ctx context.Context, action bridge.ReplyAction) (bridge.ModuleOutboxItem, error) {
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO bridge_module_outbox (device, owner_wxid, wxid, text, chat_record_id, status)
-		VALUES (?, ?, ?, ?, ?, 'pending')`,
+		INSERT INTO bridge_module_outbox (
+			device, owner_wxid, wxid, text, kind, payload_json,
+			media_kind, media_mime, media_name, media_url, media_size,
+			chat_record_id, status
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
 		strings.TrimSpace(action.Device),
 		nullString(action.OwnerWxID),
 		strings.TrimSpace(action.WxID),
 		action.Text,
+		firstNonEmpty(action.Kind, bridge.OutboxKindText),
+		nullString(string(action.PayloadJSON)),
+		nullString(action.MediaKind),
+		nullString(action.MediaMime),
+		nullString(action.MediaName),
+		nullString(action.MediaURL),
+		nullInt64(action.MediaSize),
 		nullInt64(action.ChatRecordID),
 	)
 	if err != nil {
@@ -627,9 +797,19 @@ func (s *Store) AckReplyActions(ctx context.Context, req bridge.ModuleAckRequest
 	return s.listOutboxItemsForDevice(ctx, ids, req.Device)
 }
 
+func (s *Store) GetReplyAction(ctx context.Context, id int64) (bridge.ModuleOutboxItem, error) {
+	item, err := s.findOutboxItem(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return bridge.ModuleOutboxItem{}, bridge.ErrOutboxItemNotFound
+	}
+	return item, err
+}
+
 func (s *Store) findOutboxItem(ctx context.Context, id int64) (bridge.ModuleOutboxItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, device, owner_wxid, wxid, text, chat_record_id, status, attempt_count, last_error, created_at, updated_at
+		SELECT id, device, owner_wxid, wxid, kind, text, payload_json,
+			media_kind, media_mime, media_name, media_url, media_size,
+			chat_record_id, status, attempt_count, last_error, created_at, updated_at
 		FROM bridge_module_outbox
 		WHERE id = ?`,
 		id,
@@ -669,7 +849,9 @@ func (s *Store) listOutboxItemsForDevice(ctx context.Context, ids []int64, devic
 		args = append(args, device)
 	}
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT id, device, owner_wxid, wxid, text, chat_record_id, status, attempt_count, last_error, created_at, updated_at
+		SELECT id, device, owner_wxid, wxid, kind, text, payload_json,
+			media_kind, media_mime, media_name, media_url, media_size,
+			chat_record_id, status, attempt_count, last_error, created_at, updated_at
 		FROM bridge_module_outbox
 		WHERE id IN (%s)
 			%s
@@ -690,12 +872,26 @@ func (s *Store) listOutboxItemsForDevice(ctx context.Context, ids []int64, devic
 }
 
 func (s *Store) recordMessageEvent(ctx context.Context, event bridge.MessageEvent) error {
+	if event.ChatRecordID > 0 {
+		updated, err := s.updateMessageEventByChatRecordID(ctx, event)
+		if err != nil {
+			return err
+		}
+		if updated {
+			return nil
+		}
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO bridge_message_events (
-			source_id, event_id, chat_record_id, device, owner_wxid, direction, from_wxid,
-			to_wxid, room_id, sender_wxid, text, message_type, media_kind,
-			media_mime, media_name, media_url, media_size, raw_provider, create_time
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO bridge_message_events (
+				source_id, event_id, chat_record_id, device, owner_wxid, direction, from_wxid,
+				to_wxid, room_id, sender_wxid, text, message_type, message_kind,
+				appmsg_type, appmsg_subtype, appmsg_title, appmsg_description, appmsg_url,
+				appmsg_file_name, appmsg_app_name, unsupported, evidence, location_latitude,
+				location_longitude, location_scale, location_label, location_poiname,
+				location_info_url, location_poi_id, location_from_poi_list,
+				location_poi_category_tips, media_kind, media_mime, media_name,
+				media_url, media_size, raw_provider, create_time
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullString(event.ID),
 		nullInt64(event.EventID),
 		nullInt64(event.ChatRecordID),
@@ -708,6 +904,25 @@ func (s *Store) recordMessageEvent(ctx context.Context, event bridge.MessageEven
 		nullString(event.Sender),
 		event.Text,
 		event.MessageType,
+		nullString(event.MessageKind),
+		nullInt64(int64(event.AppMsgType)),
+		nullString(event.AppMsgSubtype),
+		nullString(event.AppMsgTitle),
+		nullString(event.AppMsgDescription),
+		nullString(event.AppMsgURL),
+		nullString(event.AppMsgFileName),
+		nullString(event.AppMsgAppName),
+		nullStringSliceJSON(event.Unsupported),
+		nullStringSliceJSON(event.Evidence),
+		nullFloat64Ptr(event.LocationLatitude),
+		nullFloat64Ptr(event.LocationLongitude),
+		nullInt64(int64(event.LocationScale)),
+		nullString(event.LocationLabel),
+		nullString(event.LocationPoiName),
+		nullString(event.LocationInfoURL),
+		nullString(event.LocationPoiID),
+		nullBoolTrue(event.LocationFromPoiList),
+		nullString(event.LocationPoiTips),
 		nullString(event.MediaKind),
 		nullString(event.MediaMime),
 		nullString(event.MediaName),
@@ -717,6 +932,70 @@ func (s *Store) recordMessageEvent(ctx context.Context, event bridge.MessageEven
 		event.Timestamp(),
 	)
 	return err
+}
+
+func (s *Store) updateMessageEventByChatRecordID(ctx context.Context, event bridge.MessageEvent) (bool, error) {
+	authoritative := strings.TrimSpace(event.RawProvider) != bridge.RawProviderModuleAck
+	result, err := s.db.ExecContext(ctx, messageEventDedupUpdateStatement,
+		nullString(event.ID),
+		nullInt64(event.EventID),
+		nullString(event.From),
+		nullString(event.To),
+		nullString(event.RoomID),
+		nullString(event.Sender),
+		strings.TrimSpace(event.Text), event.Text,
+		event.MessageType, event.MessageType,
+		nullString(event.MessageKind),
+		event.AppMsgType, event.AppMsgType,
+		nullString(event.AppMsgSubtype),
+		nullString(event.AppMsgTitle),
+		nullString(event.AppMsgDescription),
+		nullString(event.AppMsgURL),
+		nullString(event.AppMsgFileName),
+		nullString(event.AppMsgAppName),
+		nullStringSliceJSON(event.Unsupported),
+		nullStringSliceJSON(event.Evidence),
+		nullFloat64Ptr(event.LocationLatitude),
+		nullFloat64Ptr(event.LocationLongitude),
+		event.LocationScale, event.LocationScale,
+		nullString(event.LocationLabel),
+		nullString(event.LocationPoiName),
+		nullString(event.LocationInfoURL),
+		nullString(event.LocationPoiID),
+		nullBoolTrue(event.LocationFromPoiList),
+		nullString(event.LocationPoiTips),
+		nullString(event.MediaKind),
+		nullString(event.MediaMime),
+		nullString(event.MediaName),
+		nullString(event.MediaURL),
+		event.MediaSize, event.MediaSize,
+		authoritative,
+		authoritative, event.Timestamp(), event.Timestamp(),
+		strings.TrimSpace(event.Device),
+		nullString(event.OwnerWxID),
+		string(event.Direction),
+		event.ChatRecordID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected > 0 {
+		return true, nil
+	}
+	var id int64
+	err = s.db.QueryRowContext(ctx, messageEventDedupExistsStatement,
+		strings.TrimSpace(event.Device),
+		nullString(event.OwnerWxID),
+		string(event.Direction),
+		event.ChatRecordID,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func upsertAPIKey(ctx context.Context, exec sqlExecutor, key config.APIKey) error {
@@ -882,7 +1161,8 @@ type scanner interface {
 
 func scanOutboxItem(row scanner) (bridge.ModuleOutboxItem, error) {
 	var item bridge.ModuleOutboxItem
-	var ownerWxID sql.NullString
+	var ownerWxID, kind, payloadJSON, mediaKind, mediaMime, mediaName, mediaURL sql.NullString
+	var mediaSize sql.NullInt64
 	var chatRecordID sql.NullInt64
 	var lastError sql.NullString
 	var createdAt, updatedAt time.Time
@@ -891,7 +1171,14 @@ func scanOutboxItem(row scanner) (bridge.ModuleOutboxItem, error) {
 		&item.Device,
 		&ownerWxID,
 		&item.WxID,
+		&kind,
 		&item.Text,
+		&payloadJSON,
+		&mediaKind,
+		&mediaMime,
+		&mediaName,
+		&mediaURL,
+		&mediaSize,
 		&chatRecordID,
 		&item.Status,
 		&item.AttemptCount,
@@ -902,6 +1189,15 @@ func scanOutboxItem(row scanner) (bridge.ModuleOutboxItem, error) {
 		return bridge.ModuleOutboxItem{}, err
 	}
 	item.OwnerWxID = ownerWxID.String
+	item.Kind = firstNonEmpty(kind.String, bridge.OutboxKindText)
+	if payloadJSON.Valid && strings.TrimSpace(payloadJSON.String) != "" {
+		item.PayloadJSON = []byte(payloadJSON.String)
+	}
+	item.MediaKind = mediaKind.String
+	item.MediaMime = mediaMime.String
+	item.MediaName = mediaName.String
+	item.MediaURL = mediaURL.String
+	item.MediaSize = mediaSize.Int64
 	item.ChatRecordID = chatRecordID.Int64
 	item.LastError = lastError.String
 	item.CreatedAt = formatTime(createdAt)
@@ -912,6 +1208,37 @@ func scanOutboxItem(row scanner) (bridge.ModuleOutboxItem, error) {
 func nullString(value string) sql.NullString {
 	value = strings.TrimSpace(value)
 	return sql.NullString{String: value, Valid: value != ""}
+}
+
+func nullStringSliceJSON(values []string) sql.NullString {
+	if len(values) == 0 {
+		return sql.NullString{}
+	}
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	if len(cleaned) == 0 {
+		return sql.NullString{}
+	}
+	data, err := json.Marshal(cleaned)
+	if err != nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: string(data), Valid: true}
+}
+
+func nullFloat64Ptr(value *float64) sql.NullFloat64 {
+	if value == nil {
+		return sql.NullFloat64{}
+	}
+	return sql.NullFloat64{Float64: *value, Valid: true}
+}
+
+func nullBoolTrue(value bool) sql.NullBool {
+	return sql.NullBool{Bool: value, Valid: value}
 }
 
 func nullInt64(value int64) sql.NullInt64 {

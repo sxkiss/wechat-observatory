@@ -14,4 +14,5 @@
     <string name="label_contact_include_chatrooms">是否同步群聊 0/1</string>
     <string name="label_media_upload_enabled">是否上传媒体 0/1</string>
     <string name="label_media_upload_limit">媒体上传大小上限字节</string>
+    <string name="label_target_android_user_id">目标 Android 用户 ID（分身常为 10，留空不限）</string>
 </resources>

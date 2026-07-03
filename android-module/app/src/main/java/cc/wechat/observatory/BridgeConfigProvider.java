@@ -23,7 +23,8 @@ public final class BridgeConfigProvider extends ContentProvider {
             "contact_sync_limit",
             "contact_include_chatrooms",
             "media_upload_enabled",
-            "media_upload_limit_bytes"
+            "media_upload_limit_bytes",
+            "target_android_user_id"
     };
 
     @Override

@@ -1,0 +1,112 @@
+{
+  "adapter_notes": [
+    "语音收发已验证可用；仍需持续积累播放时长、AMR/SILK 变体和群聊样本。"
+  ],
+  "capability_status": "stable",
+  "fixture_id": "public-api-v1.voice",
+  "inbound_envelope": {
+    "chat_display_name": "<display-name>",
+    "chat_id": "<conversation>",
+    "chat_kind": "direct",
+    "chat_record_id": 90001,
+    "create_time": 1793500000,
+    "device": "<device>",
+    "direction": "recv",
+    "event_id": 10001,
+    "evidence": [
+      "message.type=34"
+    ],
+    "from_wxid": "<peer>",
+    "id": "<message_id>",
+    "kind": "voice",
+    "media": [
+      {
+        "kind": "voice",
+        "mime": "audio/amr",
+        "name": "voice.amr",
+        "size": 1024,
+        "url": "/api/media/<device>/<date>/<voice>.amr"
+      }
+    ],
+    "message_type": 34,
+    "owner_wxid": "<owner>",
+    "text": "[语音]",
+    "to_wxid": "<owner>"
+  },
+  "kind": "voice",
+  "outbound_request": {
+    "endpoint": "/api/v1/messages/voice",
+    "json": {
+      "media_mime": "audio/amr",
+      "media_name": "voice.amr",
+      "media_url": "/api/media/<device>/<date>/<voice>.amr",
+      "wx_ids": [
+        "<target>"
+      ]
+    }
+  },
+  "outbound_supported": true,
+  "outbox_terminal": {
+    "ok": true,
+    "outbox": {
+      "attempt_count": 1,
+      "chat_record_id": 90001,
+      "created_at": "2026-07-02T09:00:00Z",
+      "device": "<device>",
+      "id": 1001,
+      "kind": "voice",
+      "media": [
+        {
+          "kind": "voice",
+          "mime": "audio/amr",
+          "name": "voice.amr",
+          "size": 1024,
+          "url": "/api/media/<device>/<date>/<voice>.amr"
+        }
+      ],
+      "owner_wxid": "<owner>",
+      "status": "sent",
+      "status_url": "/api/v1/outbox/1001",
+      "target_wxid": "<target>",
+      "updated_at": "2026-07-02T09:00:03Z"
+    },
+    "protocol_version": "v1"
+  },
+  "placeholders": {
+    "<conversation>": "Stable chat id; use this for routing, never display name.",
+    "<device>": "Bridge device name bound to the API key.",
+    "<owner>": "Current WeChat account on that device.",
+    "<peer>": "Other direct-chat participant.",
+    "<room>": "Group room id.",
+    "<target>": "Friend wxid or room id supplied by the caller."
+  },
+  "protocol_version": "v1",
+  "send_response": {
+    "chat_record_id": 1001,
+    "kind": "voice",
+    "ok": true,
+    "outbox": {
+      "device": "<device>",
+      "id": 1001,
+      "kind": "voice",
+      "media": [
+        {
+          "kind": "voice",
+          "mime": "audio/amr",
+          "name": "voice.amr",
+          "size": 1024,
+          "url": "/api/media/<device>/<date>/<voice>.amr"
+        }
+      ],
+      "owner_wxid": "<owner>",
+      "status": "pending",
+      "status_url": "/api/v1/outbox/1001",
+      "target_wxid": "<target>"
+    },
+    "outbox_id": 1001,
+    "protocol_version": "v1",
+    "status_url": "/api/v1/outbox/1001"
+  },
+  "title": "语音消息",
+  "unsupported": []
+}

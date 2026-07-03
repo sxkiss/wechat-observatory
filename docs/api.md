@@ -11,6 +11,22 @@
 http://127.0.0.1:8088
 ```
 
+## 外部适配器接入
+
+外部系统、机器人框架和插件作者优先阅读：
+
+- [Adapter Quickstart v1](adapter-quickstart-v1.md)：推荐接入流程、cursor 补拉、WebSocket 实时消息、发送 ACK 和安全规则。
+- [Capability Evidence v1](capability-evidence-v1.md)：每个消息能力当前状态、真实样本证据和升级缺口。
+- [Protocol Stability Review v1](protocol-stability-review-v1.md)：公开协议稳定面、媒体读取、owner_wxid 校验和后续风险边界。
+- [Public API Errors v1](public-api-errors-v1.md)：公开错误码、重试策略和 outbox ACK 状态语义。
+- [Public API Message Samples v1](public-api-message-samples-v1.md)：text/image/video/file/voice/emoji/location/link/mini-program/chat-history/payment 等标准 JSON 样例。
+- [Public API Python Client v1](public-api-python-client-v1.md)：最小 Python Client 封装，演示 capabilities、消息补拉、发送 ACK 和媒体下载。
+- `GET /api/v1/capabilities`：运行时能力发现，适配器应根据该接口判断当前可用的消息类型和传输方式。
+- `GET /docs/openapi.json`：OpenAPI 结构，适合生成客户端或做接口校验。
+- `python3 scripts/public_api_contract_check.py`：公开协议验收套件，默认只读检查 capabilities、messages、WebSocket、media、OpenAPI；真实发送必须显式加 `--confirm-send`。
+
+外部适配器应只依赖 `/api/v1` 和 `/api/media/...`。`/module/...` 是手机模块内部协议，`/api/send/...` 是旧管理兼容接口，新接入不建议使用。
+
 ## 管理认证
 
 ```bash
@@ -97,7 +113,7 @@ curl -H "X-Bridge-Password: your-admin-password" \
 | `wxid` | 对话对象或群聊 ID |
 | `limit` | 返回数量 |
 
-## 发送文本
+## 管理端发送接口
 
 ```bash
 curl -X POST \
@@ -107,7 +123,19 @@ curl -X POST \
   http://127.0.0.1:8088/api/send/text
 ```
 
-`owner_wxid` 必填。它用于防止浏览器停留在旧账号状态时，把消息发到切换后的微信账号里。
+`/api/send/text` 是旧管理兼容接口，会写入 `kind=text` 的 Action Outbox 任务。`owner_wxid` 必填，用于防止浏览器停留在旧账号状态时，把消息发到切换后的微信账号里。
+
+管理端也可以直接创建 Action Outbox v1 任务：
+
+```bash
+curl -X POST \
+  -H "X-Bridge-Password: your-admin-password" \
+  -H "Content-Type: application/json" \
+  -d '{"device":"phone-a","owner_wxid":"wxid_current_login","wx_ids":["wxid_friend"],"kind":"image","media_url":"http://127.0.0.1:8088/api/media/example.jpg","media_name":"example.jpg","media_mime":"image/jpeg"}' \
+  http://127.0.0.1:8088/api/send/action
+```
+
+外部系统不要依赖管理密码接口，推荐使用 `/api/v1/messages/{kind}` 和 `/api/v1/outbox/{id}`。
 
 ## 实时事件
 

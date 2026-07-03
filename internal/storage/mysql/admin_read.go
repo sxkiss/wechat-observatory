@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -49,11 +50,27 @@ func (s *Store) ListAPIKeys(ctx context.Context, limit int) ([]bridge.APIKeyView
 
 func (s *Store) ListStoredEvents(ctx context.Context, limit int) ([]bridge.StoredEventView, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, source_id, event_id, chat_record_id, device, owner_wxid, direction, from_wxid,
-			to_wxid, room_id, sender_wxid, text, message_type, media_kind,
-			media_mime, media_name, media_url, media_size, raw_provider, create_time, created_at
-		FROM bridge_message_events
-		ORDER BY id DESC
+		SELECT ev.id, ev.source_id, ev.event_id, ev.chat_record_id, ev.device, ev.owner_wxid,
+			ev.direction, ev.from_wxid, ev.to_wxid, ev.room_id, ev.sender_wxid, ev.text,
+			ev.message_type, ev.message_kind, ev.appmsg_type, ev.appmsg_subtype,
+			ev.appmsg_title, ev.appmsg_description, ev.appmsg_url, ev.appmsg_file_name,
+			ev.appmsg_app_name, ev.unsupported, ev.evidence,
+			ev.location_latitude, ev.location_longitude, ev.location_scale, ev.location_label,
+			ev.location_poiname, ev.location_info_url, ev.location_poi_id,
+			ev.location_from_poi_list, ev.location_poi_category_tips,
+			ev.media_kind, ev.media_mime, ev.media_name, ev.media_url, ev.media_size,
+			ev.raw_provider, ev.create_time,
+			ev.created_at, c.nickname, c.remark, c.contact_alias, c.is_deleted
+		FROM bridge_message_events ev
+		LEFT JOIN bridge_module_contacts c
+			ON c.device = ev.device
+			AND c.owner_wxid <=> ev.owner_wxid
+			AND c.wxid = CASE
+				WHEN ev.room_id IS NOT NULL AND ev.room_id <> '' THEN ev.room_id
+				WHEN ev.direction = 'sent' THEN COALESCE(NULLIF(ev.to_wxid, ''), NULLIF(ev.from_wxid, ''), ev.sender_wxid)
+				ELSE COALESCE(NULLIF(ev.from_wxid, ''), NULLIF(ev.sender_wxid, ''), ev.to_wxid)
+			END
+		ORDER BY ev.id DESC
 		LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
 		return nil, err
@@ -75,14 +92,14 @@ func (s *Store) ListMessages(ctx context.Context, filter bridge.MessageFilter) (
 }
 
 func listMessagesQuery(filter bridge.MessageFilter) (string, []any) {
-	conditions := []string{"(raw_provider IS NULL OR raw_provider <> ?)"}
+	conditions := []string{"(ev.raw_provider IS NULL OR ev.raw_provider <> ?)"}
 	args := []any{bridge.RawProviderModuleAck}
 	if device := strings.TrimSpace(filter.Device); device != "" {
-		conditions = append(conditions, "device = ?")
+		conditions = append(conditions, "ev.device = ?")
 		args = append(args, device)
 	}
 	if ownerWxID := strings.TrimSpace(filter.OwnerWxID); ownerWxID != "" {
-		conditions = append(conditions, "owner_wxid = ?")
+		conditions = append(conditions, "ev.owner_wxid = ?")
 		args = append(args, ownerWxID)
 	}
 	chatID := strings.TrimSpace(filter.ChatID)
@@ -93,28 +110,64 @@ func listMessagesQuery(filter bridge.MessageFilter) (string, []any) {
 		chatKind := strings.ToLower(strings.TrimSpace(filter.ChatKind))
 		switch {
 		case chatKind == string(bridge.ChatKindRoom) || strings.Contains(strings.ToLower(chatID), "@chatroom"):
-			conditions = append(conditions, "(room_id = ? OR from_wxid = ? OR to_wxid = ?)")
+			conditions = append(conditions, "(ev.room_id = ? OR ev.from_wxid = ? OR ev.to_wxid = ?)")
 			args = append(args, chatID, chatID, chatID)
 		case chatKind == string(bridge.ChatKindDirect):
-			conditions = append(conditions, "((room_id IS NULL OR room_id = '') AND (from_wxid = ? OR to_wxid = ? OR sender_wxid = ?))")
+			conditions = append(conditions, "((ev.room_id IS NULL OR ev.room_id = '') AND (ev.from_wxid = ? OR ev.to_wxid = ? OR ev.sender_wxid = ?))")
 			args = append(args, chatID, chatID, chatID)
 		default:
-			conditions = append(conditions, "(from_wxid = ? OR to_wxid = ? OR room_id = ? OR sender_wxid = ?)")
+			conditions = append(conditions, "(ev.from_wxid = ? OR ev.to_wxid = ? OR ev.room_id = ? OR ev.sender_wxid = ?)")
 			args = append(args, chatID, chatID, chatID, chatID)
 		}
 	} else if wxid := strings.TrimSpace(filter.WxID); wxid != "" {
-		conditions = append(conditions, "(from_wxid = ? OR to_wxid = ? OR room_id = ? OR sender_wxid = ?)")
+		conditions = append(conditions, "(ev.from_wxid = ? OR ev.to_wxid = ? OR ev.room_id = ? OR ev.sender_wxid = ?)")
 		args = append(args, wxid, wxid, wxid, wxid)
 	}
-	args = append(args, normalizeLimit(filter.Limit))
+	orderBy := "ev.id DESC"
+	if filter.AfterIDSet {
+		conditions = append(conditions, "ev.id > ?")
+		args = append(args, filter.AfterID)
+		orderBy = "ev.id ASC"
+	}
+	if filter.BeforeID > 0 {
+		conditions = append(conditions, "ev.id < ?")
+		args = append(args, filter.BeforeID)
+	}
+	args = append(args, normalizeMessageQueryLimit(filter.Limit))
 	return `
-		SELECT id, source_id, event_id, chat_record_id, device, owner_wxid, direction, from_wxid,
-			to_wxid, room_id, sender_wxid, text, message_type, media_kind,
-			media_mime, media_name, media_url, media_size, raw_provider, create_time, created_at
-		FROM bridge_message_events
+		SELECT ev.id, ev.source_id, ev.event_id, ev.chat_record_id, ev.device, ev.owner_wxid,
+			ev.direction, ev.from_wxid, ev.to_wxid, ev.room_id, ev.sender_wxid, ev.text,
+			ev.message_type, ev.message_kind, ev.appmsg_type, ev.appmsg_subtype,
+			ev.appmsg_title, ev.appmsg_description, ev.appmsg_url, ev.appmsg_file_name,
+			ev.appmsg_app_name, ev.unsupported, ev.evidence,
+			ev.location_latitude, ev.location_longitude, ev.location_scale, ev.location_label,
+			ev.location_poiname, ev.location_info_url, ev.location_poi_id,
+			ev.location_from_poi_list, ev.location_poi_category_tips,
+			ev.media_kind, ev.media_mime, ev.media_name, ev.media_url, ev.media_size,
+			ev.raw_provider, ev.create_time,
+			ev.created_at, c.nickname, c.remark, c.contact_alias, c.is_deleted
+		FROM bridge_message_events ev
+		LEFT JOIN bridge_module_contacts c
+			ON c.device = ev.device
+			AND c.owner_wxid <=> ev.owner_wxid
+			AND c.wxid = CASE
+				WHEN ev.room_id IS NOT NULL AND ev.room_id <> '' THEN ev.room_id
+				WHEN ev.direction = 'sent' THEN COALESCE(NULLIF(ev.to_wxid, ''), NULLIF(ev.from_wxid, ''), ev.sender_wxid)
+				ELSE COALESCE(NULLIF(ev.from_wxid, ''), NULLIF(ev.sender_wxid, ''), ev.to_wxid)
+			END
 		WHERE ` + strings.Join(conditions, " AND ") + `
-		ORDER BY id DESC
+		ORDER BY ` + orderBy + `
 		LIMIT ?`, args
+}
+
+func normalizeMessageQueryLimit(limit int) int {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 501 {
+		return 501
+	}
+	return limit
 }
 
 func scanStoredEventViews(rows *sql.Rows) ([]bridge.StoredEventView, error) {
@@ -122,8 +175,16 @@ func scanStoredEventViews(rows *sql.Rows) ([]bridge.StoredEventView, error) {
 	for rows.Next() {
 		var item bridge.StoredEventView
 		var sourceID, ownerWxID, fromWxID, toWxID, roomID, senderWxID, rawProvider sql.NullString
+		var messageKind, appMsgSubtype, appMsgTitle, appMsgDescription, appMsgURL, appMsgFileName, appMsgAppName sql.NullString
+		var unsupportedJSON, evidenceJSON sql.NullString
+		var locationLabel, locationPoiName, locationInfoURL, locationPoiID, locationPoiTips sql.NullString
+		var locationLatitude, locationLongitude sql.NullFloat64
+		var locationScale sql.NullInt64
+		var locationFromPoiList sql.NullBool
 		var mediaKind, mediaMime, mediaName, mediaURL sql.NullString
-		var eventID, chatRecordID, mediaSize sql.NullInt64
+		var chatName, chatRemark, chatAlias sql.NullString
+		var eventID, chatRecordID, appMsgType, mediaSize sql.NullInt64
+		var chatDeleted sql.NullBool
 		var createdAt time.Time
 		if err := rows.Scan(
 			&item.ID,
@@ -139,6 +200,25 @@ func scanStoredEventViews(rows *sql.Rows) ([]bridge.StoredEventView, error) {
 			&senderWxID,
 			&item.Text,
 			&item.MessageType,
+			&messageKind,
+			&appMsgType,
+			&appMsgSubtype,
+			&appMsgTitle,
+			&appMsgDescription,
+			&appMsgURL,
+			&appMsgFileName,
+			&appMsgAppName,
+			&unsupportedJSON,
+			&evidenceJSON,
+			&locationLatitude,
+			&locationLongitude,
+			&locationScale,
+			&locationLabel,
+			&locationPoiName,
+			&locationInfoURL,
+			&locationPoiID,
+			&locationFromPoiList,
+			&locationPoiTips,
 			&mediaKind,
 			&mediaMime,
 			&mediaName,
@@ -147,6 +227,10 @@ func scanStoredEventViews(rows *sql.Rows) ([]bridge.StoredEventView, error) {
 			&rawProvider,
 			&item.CreateTime,
 			&createdAt,
+			&chatName,
+			&chatRemark,
+			&chatAlias,
+			&chatDeleted,
 		); err != nil {
 			return nil, err
 		}
@@ -158,6 +242,31 @@ func scanStoredEventViews(rows *sql.Rows) ([]bridge.StoredEventView, error) {
 		item.ToWxID = toWxID.String
 		item.RoomID = roomID.String
 		item.SenderWxID = senderWxID.String
+		item.MessageKind = messageKind.String
+		item.AppMsgType = int32(appMsgType.Int64)
+		item.AppMsgSubtype = appMsgSubtype.String
+		item.AppMsgTitle = appMsgTitle.String
+		item.AppMsgDescription = appMsgDescription.String
+		item.AppMsgURL = appMsgURL.String
+		item.AppMsgFileName = appMsgFileName.String
+		item.AppMsgAppName = appMsgAppName.String
+		item.Unsupported = decodeStringSliceJSON(unsupportedJSON.String)
+		item.Evidence = decodeStringSliceJSON(evidenceJSON.String)
+		if locationLatitude.Valid {
+			value := locationLatitude.Float64
+			item.LocationLatitude = &value
+		}
+		if locationLongitude.Valid {
+			value := locationLongitude.Float64
+			item.LocationLongitude = &value
+		}
+		item.LocationScale = int(locationScale.Int64)
+		item.LocationLabel = locationLabel.String
+		item.LocationPoiName = locationPoiName.String
+		item.LocationInfoURL = locationInfoURL.String
+		item.LocationPoiID = locationPoiID.String
+		item.LocationFromPoiList = locationFromPoiList.Bool
+		item.LocationPoiTips = locationPoiTips.String
 		item.MediaKind = mediaKind.String
 		item.MediaMime = mediaMime.String
 		item.MediaName = mediaName.String
@@ -173,6 +282,11 @@ func scanStoredEventViews(rows *sql.Rows) ([]bridge.StoredEventView, error) {
 		}.Normalize()
 		item.ChatID = event.ChatID()
 		item.ChatKind = string(event.Kind())
+		item.ChatName = chatName.String
+		item.ChatRemark = chatRemark.String
+		item.ChatAlias = chatAlias.String
+		item.ChatDisplayName = firstNonEmptyContactLabel(chatRemark.String, chatName.String, chatAlias.String)
+		item.ChatDeleted = chatDeleted.Bool
 		item.CreatedAt = formatTime(createdAt)
 		out = append(out, item)
 	}
@@ -409,4 +523,34 @@ func formatNullTime(value sql.NullTime) string {
 		return ""
 	}
 	return formatTime(value.Time)
+}
+
+func decodeStringSliceJSON(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(value), &out); err != nil {
+		return nil
+	}
+	cleaned := make([]string, 0, len(out))
+	for _, item := range out {
+		if item = strings.TrimSpace(item); item != "" {
+			cleaned = append(cleaned, item)
+		}
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
+}
+
+func firstNonEmptyContactLabel(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }

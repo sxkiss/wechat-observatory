@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const maxMediaBytes = 8 * 1024 * 1024
+const maxMediaBytes = 50 * 1024 * 1024
 
 func (s *Service) StoreMediaAttachment(event MessageEvent) (MessageEvent, error) {
 	if strings.TrimSpace(s.mediaDir) == "" || strings.TrimSpace(event.MediaBase64) == "" {
@@ -121,13 +121,8 @@ func decodeMediaBase64(raw string) ([]byte, string, error) {
 }
 
 func mediaKindForMessage(messageType int32, mime string) string {
-	switch {
-	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "image/"):
-		return "image"
-	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "audio/"):
-		return "voice"
-	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "video/"):
-		return "video"
+	if kind := mediaKindForMime(mime); kind != "" {
+		return kind
 	}
 	switch messageType {
 	case 3:
@@ -144,6 +139,19 @@ func mediaKindForMessage(messageType int32, mime string) string {
 		return "file"
 	default:
 		return "file"
+	}
+}
+
+func mediaKindForMime(mime string) string {
+	switch {
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "image/"):
+		return MessageKindImage
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "audio/"):
+		return MessageKindVoice
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "video/"):
+		return MessageKindVideo
+	default:
+		return ""
 	}
 }
 

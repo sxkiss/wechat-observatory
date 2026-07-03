@@ -30,6 +30,9 @@ func TestMigrationsCoverCoreTables(t *testing.T) {
 	if !strings.Contains(joined, "enabled BOOLEAN NOT NULL DEFAULT TRUE") {
 		t.Fatalf("bridge_api_keys migration should include enabled state: %s", joined)
 	}
+	if !strings.Contains(joined, "location_latitude DOUBLE NULL") || !strings.Contains(joined, "location_poi_category_tips TEXT NULL") {
+		t.Fatalf("bridge_message_events migration should include location columns: %s", joined)
+	}
 }
 
 func TestListMessagesQueryExcludesModuleAckEvents(t *testing.T) {
@@ -38,8 +41,11 @@ func TestListMessagesQueryExcludesModuleAckEvents(t *testing.T) {
 		WxID:   "wxid_friend",
 		Limit:  25,
 	})
-	if !strings.Contains(query, "raw_provider IS NULL OR raw_provider <> ?") {
+	if !strings.Contains(query, "ev.raw_provider IS NULL OR ev.raw_provider <> ?") {
 		t.Fatalf("message query does not exclude module ack events: %s", query)
+	}
+	if !strings.Contains(query, "LEFT JOIN bridge_module_contacts c") || !strings.Contains(query, "c.wxid = CASE") {
+		t.Fatalf("message query should include chat contact metadata join: %s", query)
 	}
 	if len(args) != 7 {
 		t.Fatalf("unexpected args: %#v", args)
@@ -80,6 +86,50 @@ func TestListMessagesQueryFiltersByOwnerWxID(t *testing.T) {
 	}
 }
 
+func TestListMessagesQuerySupportsAfterIDForwardSync(t *testing.T) {
+	query, args := listMessagesQuery(bridge.MessageFilter{
+		Device:     "phone-a",
+		AfterID:    100,
+		AfterIDSet: true,
+		Limit:      26,
+	})
+	if !strings.Contains(query, "ev.id > ?") || !strings.Contains(query, "ORDER BY ev.id ASC") {
+		t.Fatalf("after_id query should scan forward: %s", query)
+	}
+	if len(args) != 4 || args[0] != bridge.RawProviderModuleAck || args[1] != "phone-a" || args[2] != int64(100) || args[3] != 26 {
+		t.Fatalf("after_id query args mismatch: %#v", args)
+	}
+}
+
+func TestListMessagesQuerySupportsAfterIDZeroForwardSync(t *testing.T) {
+	query, args := listMessagesQuery(bridge.MessageFilter{
+		Device:     "phone-a",
+		AfterID:    0,
+		AfterIDSet: true,
+		Limit:      26,
+	})
+	if !strings.Contains(query, "ev.id > ?") || !strings.Contains(query, "ORDER BY ev.id ASC") {
+		t.Fatalf("after_id=0 query should scan forward: %s", query)
+	}
+	if len(args) != 4 || args[0] != bridge.RawProviderModuleAck || args[1] != "phone-a" || args[2] != int64(0) || args[3] != 26 {
+		t.Fatalf("after_id=0 query args mismatch: %#v", args)
+	}
+}
+
+func TestListMessagesQuerySupportsBeforeIDHistoryPage(t *testing.T) {
+	query, args := listMessagesQuery(bridge.MessageFilter{
+		Device:   "phone-a",
+		BeforeID: 100,
+		Limit:    26,
+	})
+	if !strings.Contains(query, "ev.id < ?") || !strings.Contains(query, "ORDER BY ev.id DESC") {
+		t.Fatalf("before_id query should scan backward: %s", query)
+	}
+	if len(args) != 4 || args[0] != bridge.RawProviderModuleAck || args[1] != "phone-a" || args[2] != int64(100) || args[3] != 26 {
+		t.Fatalf("before_id query args mismatch: %#v", args)
+	}
+}
+
 func TestMessageEventOwnerBackfillUsesCurrentDeviceWxID(t *testing.T) {
 	query := strings.Join(strings.Fields(messageEventOwnerBackfillStatement), " ")
 	for _, want := range []string{
@@ -95,6 +145,45 @@ func TestMessageEventOwnerBackfillUsesCurrentDeviceWxID(t *testing.T) {
 	}
 }
 
+func TestMessageEventDedupUpdateMatchesStableMessageIdentity(t *testing.T) {
+	query := strings.Join(strings.Fields(messageEventDedupUpdateStatement), " ")
+	for _, want := range []string{
+		"UPDATE bridge_message_events",
+		"WHERE device = ?",
+		"owner_wxid <=> ?",
+		"direction = ?",
+		"chat_record_id = ?",
+		"LIMIT 1",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("dedup update query missing %q: %s", want, query)
+		}
+	}
+	if strings.Contains(query, "text = ?") {
+		t.Fatalf("dedup update should not overwrite existing text with empty input: %s", query)
+	}
+}
+
+func TestMessageEventDedupUpdatePromotesObservedEventOverAckPlaceholder(t *testing.T) {
+	query := strings.Join(strings.Fields(messageEventDedupUpdateStatement), " ")
+	for _, want := range []string{
+		"raw_provider = CASE",
+		"WHEN ? THEN NULL",
+		"ELSE raw_provider",
+		"location_latitude = COALESCE(?, location_latitude)",
+		"location_scale = CASE WHEN ? > 0 THEN ? ELSE location_scale END",
+		"media_url = COALESCE(?, media_url)",
+		"media_size = CASE WHEN ? > 0 THEN ? ELSE media_size END",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("dedup update query missing %q: %s", want, query)
+		}
+	}
+	if strings.Contains(query, "WHEN raw_provider IS NULL OR raw_provider = '' THEN ?") {
+		t.Fatalf("module_ack update must not overwrite an already observed message provider: %s", query)
+	}
+}
+
 func TestListMessagesQuerySupportsChatRooms(t *testing.T) {
 	query, args := listMessagesQuery(bridge.MessageFilter{
 		Device:   "phone-a",
@@ -102,7 +191,7 @@ func TestListMessagesQuerySupportsChatRooms(t *testing.T) {
 		ChatKind: string(bridge.ChatKindRoom),
 		Limit:    25,
 	})
-	if !strings.Contains(query, "room_id = ? OR from_wxid = ? OR to_wxid = ?") {
+	if !strings.Contains(query, "ev.room_id = ? OR ev.from_wxid = ? OR ev.to_wxid = ?") {
 		t.Fatalf("message query does not target chat rooms: %s", query)
 	}
 	if len(args) != 6 {

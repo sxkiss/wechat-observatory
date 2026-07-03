@@ -1,0 +1,35 @@
+{
+  "sample_id": "voice.private.amr",
+  "kind": "voice",
+  "direction": "inbound_outbound",
+  "wechat_type": 34,
+  "verification": "db-verified",
+  "input": {
+    "action_kind": "voice",
+    "target": "<peer>",
+    "media_url": "/api/media/<device>/<date>/<file.amr>",
+    "duration_ms": "<duration>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "voice",
+    "message_type": 34,
+    "media_kind": "voice",
+    "evidence": [
+      "outbox.kind=voice",
+      "wechat.local_db.message.type=34"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "media_base64",
+    "media_file_bytes"
+  ],
+  "needs_more_samples": [
+    "silk",
+    "playback-confirmation",
+    "duration-metadata"
+  ]
+}
+

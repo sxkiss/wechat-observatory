@@ -86,7 +86,7 @@ export async function getContacts(params: {
 }) {
   const search = new URLSearchParams({
     device: params.device,
-    limit: String(params.limit ?? 300)
+    limit: String(params.limit ?? 500)
   });
   if (params.query.trim()) {
     search.set("q", params.query.trim());
@@ -148,6 +148,125 @@ export async function sendText(params: {
       wx_ids: [params.wxid],
       text: params.text
     }
+  });
+}
+
+export const SEND_ACTION_KINDS = [
+  "text",
+  "image",
+  "video",
+  "voice",
+  "file",
+  "emoji",
+  "location",
+  "quote",
+  "link",
+  "mini_program",
+  "chat_history"
+] as const;
+
+export type SendActionKind = (typeof SEND_ACTION_KINDS)[number];
+
+export type SendActionParams = {
+  password: string;
+  device: string;
+  ownerWxid: string;
+  wxid: string;
+  kind: SendActionKind;
+  text?: string;
+  mediaKind?: string;
+  mediaBase64?: string;
+  mediaURL?: string;
+  mediaName?: string;
+  mediaMime?: string;
+  mediaSize?: number;
+  quoteMsgId?: number;
+  quoteChatRecordId?: number;
+  quoteTalker?: string;
+  quoteSenderWxid?: string;
+  appmsgTitle?: string;
+  appmsgDescription?: string;
+  appmsgUrl?: string;
+  appmsgAppName?: string;
+  appmsgThumbUrl?: string;
+  miniProgramUsername?: string;
+  miniProgramPagePath?: string;
+  miniProgramAppid?: string;
+  miniProgramIconUrl?: string;
+  miniProgramVersion?: number;
+  miniProgramType?: number;
+  emojiMd5?: string;
+  emojiProductId?: string;
+  recordTitle?: string;
+  recordDescription?: string;
+  recorditemXml?: string;
+  forwardOriginal?: boolean;
+  sourceChatRecordId?: number;
+  sourceChatRecordIds?: number[];
+  locationLatitude?: number;
+  locationLongitude?: number;
+  locationScale?: number;
+  locationLabel?: string;
+  locationPoiName?: string;
+  locationInfoUrl?: string;
+  locationPoiId?: string;
+  locationFromPoiList?: boolean;
+  locationPoiTips?: string;
+};
+
+export function buildSendActionBody(params: SendActionParams) {
+  return {
+    device: params.device,
+    owner_wxid: params.ownerWxid,
+    wx_ids: [params.wxid],
+    kind: params.kind,
+    text: params.text,
+    media_kind: params.mediaKind,
+    media_base64: params.mediaBase64,
+    media_url: params.mediaURL,
+    media_name: params.mediaName,
+    media_mime: params.mediaMime,
+    media_size: params.mediaSize,
+    quote_msg_id: params.quoteMsgId,
+    quote_chat_record_id: params.quoteChatRecordId,
+    quote_talker: params.quoteTalker,
+    quote_sender_wxid: params.quoteSenderWxid,
+    appmsg_title: params.appmsgTitle,
+    appmsg_description: params.appmsgDescription,
+    appmsg_url: params.appmsgUrl,
+    appmsg_app_name: params.appmsgAppName,
+    appmsg_thumb_url: params.appmsgThumbUrl,
+    mini_program_username: params.miniProgramUsername,
+    mini_program_page_path: params.miniProgramPagePath,
+    mini_program_appid: params.miniProgramAppid,
+    mini_program_icon_url: params.miniProgramIconUrl,
+    mini_program_version: params.miniProgramVersion,
+    mini_program_type: params.miniProgramType,
+    emoji_md5: params.emojiMd5,
+    emoji_product_id: params.emojiProductId,
+    record_title: params.recordTitle,
+    record_description: params.recordDescription,
+    recorditem_xml: params.recorditemXml,
+    forward_original: params.forwardOriginal,
+    source_chat_record_id: params.sourceChatRecordId,
+    source_chat_record_ids: params.sourceChatRecordIds,
+    location_latitude: params.locationLatitude,
+    location_longitude: params.locationLongitude,
+    location_scale: params.locationScale,
+    location_label: params.locationLabel,
+    location_poiname: params.locationPoiName,
+    location_info_url: params.locationInfoUrl,
+    location_poi_id: params.locationPoiId,
+    location_from_poi_list: params.locationFromPoiList,
+    location_poi_category_tips: params.locationPoiTips
+  };
+}
+
+export async function sendAction(params: SendActionParams) {
+  return requestJSON<{ ok: boolean; chat_record_id?: number; outbox_id?: number }>("/api/send/action", {
+    password: params.password,
+    method: "POST",
+    body: buildSendActionBody(params)
   });
 }
 

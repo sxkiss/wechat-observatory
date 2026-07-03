@@ -1,0 +1,29 @@
+{
+  "sample_id": "unknown.high-bit",
+  "kind": "unknown-business",
+  "direction": "inbound",
+  "wechat_type": "<observed-high-bit-type>",
+  "verification": "sample-only",
+  "input": {
+    "module_event": "message",
+    "message_type": "<observed-high-bit-type>",
+    "raw_xml_shape": "<optional-redacted-shape>"
+  },
+  "expected": {
+    "message_kind": "unknown",
+    "outbound_supported": false,
+    "unsupported": [
+      "message_type:<observed-high-bit-type>"
+    ],
+    "evidence": [
+      "wechat.local_db.message.type"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "text",
+    "raw_xml"
+  ]
+}
+

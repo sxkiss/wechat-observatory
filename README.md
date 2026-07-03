@@ -32,7 +32,7 @@ WeChat Observatory（微信看台）是一个通过 Android LSPosed 模块接入
 
 ```text
 微信消息 -> LSPosed 模块 -> 网关入库和实时推送 -> Web 管理台
-Web 手动发送 -> 网关出站队列/WebSocket -> LSPosed 模块 -> 微信
+Web 管理台/公开 API -> Action Outbox -> 网关出站队列/WebSocket -> LSPosed 模块 -> 微信
 ```
 
 ## 功能
@@ -42,7 +42,7 @@ Web 手动发送 -> 网关出站队列/WebSocket -> LSPosed 模块 -> 微信
 - 当前账号隔离：切换微信后，同一个 API Key 更新当前绑定，旧账号消息不会混到当前聊天列表。
 - 通讯录同步：支持好友、群聊、文件传输助手。
 - 消息观测：文本、图片、语音、视频、文件等消息类型均可记录；附件字节上传后可在 Web 中预览或播放。
-- 手动发送：Web 管理台发送文本，手机模块从队列取消息并在微信内发送。
+- 手动/外部发送：Action Outbox v1 支持文本、图片、视频、语音、文件、表情、位置、引用、链接、小程序和聊天记录等发送动作；旧文本接口保持兼容。
 - 实时刷新：Web 管理台通过 SSE/WebSocket/轮询组合展示实时状态和消息。
 - Docker 部署：提供单机 Docker Compose 示例和 k3s 参考配置。
 
@@ -178,7 +178,15 @@ curl -H "X-Bridge-Password: your-admin-password" http://127.0.0.1:8088/api/api-k
 - `POST /module/outbox/poll`
 - `POST /module/outbox/ack`
 
-完整协议见 [docs/api.md](docs/api.md) 和 [docs/module-contract.md](docs/module-contract.md)。
+公开适配器优先使用：
+
+- `GET /api/v1/capabilities`
+- `GET /api/v1/messages`
+- `GET /api/v1/ws`
+- `POST /api/v1/messages/{kind}`
+- `GET /api/v1/outbox/{id}`
+
+完整协议见 [docs/api.md](docs/api.md)、[docs/module-contract.md](docs/module-contract.md) 和 [docs/adapter-quickstart-v1.md](docs/adapter-quickstart-v1.md)。
 
 ## 安全和合规提醒
 

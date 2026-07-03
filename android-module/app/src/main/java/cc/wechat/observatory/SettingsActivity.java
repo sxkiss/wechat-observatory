@@ -26,6 +26,7 @@ public final class SettingsActivity extends Activity {
     private static final String DEFAULT_CONTACT_INCLUDE_CHATROOMS = "1";
     private static final String DEFAULT_MEDIA_UPLOAD_ENABLED = "1";
     private static final String DEFAULT_MEDIA_UPLOAD_LIMIT_BYTES = "5242880";
+    private static final String DEFAULT_TARGET_ANDROID_USER_ID = "";
     private static final Map<String, String> DEFAULTS = new LinkedHashMap<>();
 
     static {
@@ -39,6 +40,7 @@ public final class SettingsActivity extends Activity {
         DEFAULTS.put("contact_include_chatrooms", DEFAULT_CONTACT_INCLUDE_CHATROOMS);
         DEFAULTS.put("media_upload_enabled", DEFAULT_MEDIA_UPLOAD_ENABLED);
         DEFAULTS.put("media_upload_limit_bytes", DEFAULT_MEDIA_UPLOAD_LIMIT_BYTES);
+        DEFAULTS.put("target_android_user_id", DEFAULT_TARGET_ANDROID_USER_ID);
     }
 
     private final Map<String, EditText> fields = new LinkedHashMap<>();
@@ -82,6 +84,7 @@ public final class SettingsActivity extends Activity {
         addField(root, "contact_include_chatrooms", R.string.label_contact_include_chatrooms, InputType.TYPE_CLASS_NUMBER);
         addField(root, "media_upload_enabled", R.string.label_media_upload_enabled, InputType.TYPE_CLASS_NUMBER);
         addField(root, "media_upload_limit_bytes", R.string.label_media_upload_limit, InputType.TYPE_CLASS_NUMBER);
+        addField(root, "target_android_user_id", R.string.label_target_android_user_id, InputType.TYPE_CLASS_NUMBER);
 
         Button saveButton = new Button(this);
         saveButton.setText(R.string.action_save);

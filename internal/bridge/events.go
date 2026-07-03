@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -19,32 +20,65 @@ const (
 	ChatKindUnknown ChatKind = "unknown"
 
 	RawProviderModuleAck = "module_ack"
+
+	OutboxKindText     = "text"
+	OutboxKindImage    = "image"
+	OutboxKindVideo    = "video"
+	OutboxKindVoice    = "voice"
+	OutboxKindFile     = "file"
+	OutboxKindEmoji    = "emoji"
+	OutboxKindLocation = "location"
+	OutboxKindQuote    = "quote"
+	OutboxKindLink     = "link"
+
+	OutboxKindChatHistory = "chat_history"
+	OutboxKindMiniProgram = "mini_program"
 )
 
 type MessageEvent struct {
-	APIKey       string    `json:"api_key,omitempty"`
-	ID           string    `json:"id"`
-	EventID      int64     `json:"event_id"`
-	ChatRecordID int64     `json:"chat_record_id"`
-	Device       string    `json:"device"`
-	OwnerWxID    string    `json:"owner_wxid,omitempty"`
-	From         string    `json:"from"`
-	To           string    `json:"to"`
-	RoomID       string    `json:"room_id"`
-	Sender       string    `json:"sender"`
-	Text         string    `json:"text"`
-	MessageType  int32     `json:"message_type"`
-	MediaKind    string    `json:"media_kind,omitempty"`
-	MediaMime    string    `json:"media_mime,omitempty"`
-	MediaName    string    `json:"media_name,omitempty"`
-	MediaURL     string    `json:"media_url,omitempty"`
-	MediaSize    int64     `json:"media_size,omitempty"`
-	MediaBase64  string    `json:"media_base64,omitempty"`
-	CreateTime   int64     `json:"create_time"`
-	Direction    Direction `json:"direction"`
-	RawProvider  string    `json:"raw_provider"`
-	ChatKind     ChatKind  `json:"chat_kind,omitempty"`
-	Conversation string    `json:"chat_id,omitempty"`
+	APIKey              string    `json:"api_key,omitempty"`
+	ID                  string    `json:"id"`
+	EventID             int64     `json:"event_id"`
+	ChatRecordID        int64     `json:"chat_record_id"`
+	Device              string    `json:"device"`
+	OwnerWxID           string    `json:"owner_wxid,omitempty"`
+	MessageKind         string    `json:"kind,omitempty"`
+	From                string    `json:"from"`
+	To                  string    `json:"to"`
+	RoomID              string    `json:"room_id"`
+	Sender              string    `json:"sender"`
+	Text                string    `json:"text"`
+	MessageType         int32     `json:"message_type"`
+	RawXML              string    `json:"raw_xml,omitempty"`
+	AppMsgType          int32     `json:"appmsg_type,omitempty"`
+	AppMsgSubtype       string    `json:"appmsg_subtype,omitempty"`
+	AppMsgTitle         string    `json:"appmsg_title,omitempty"`
+	AppMsgDescription   string    `json:"appmsg_description,omitempty"`
+	AppMsgURL           string    `json:"appmsg_url,omitempty"`
+	AppMsgFileName      string    `json:"appmsg_file_name,omitempty"`
+	AppMsgAppName       string    `json:"appmsg_app_name,omitempty"`
+	Unsupported         []string  `json:"unsupported,omitempty"`
+	Evidence            []string  `json:"evidence,omitempty"`
+	LocationLatitude    *float64  `json:"location_latitude,omitempty"`
+	LocationLongitude   *float64  `json:"location_longitude,omitempty"`
+	LocationScale       int       `json:"location_scale,omitempty"`
+	LocationLabel       string    `json:"location_label,omitempty"`
+	LocationPoiName     string    `json:"location_poiname,omitempty"`
+	LocationInfoURL     string    `json:"location_info_url,omitempty"`
+	LocationPoiID       string    `json:"location_poi_id,omitempty"`
+	LocationFromPoiList bool      `json:"location_from_poi_list,omitempty"`
+	LocationPoiTips     string    `json:"location_poi_category_tips,omitempty"`
+	MediaKind           string    `json:"media_kind,omitempty"`
+	MediaMime           string    `json:"media_mime,omitempty"`
+	MediaName           string    `json:"media_name,omitempty"`
+	MediaURL            string    `json:"media_url,omitempty"`
+	MediaSize           int64     `json:"media_size,omitempty"`
+	MediaBase64         string    `json:"media_base64,omitempty"`
+	CreateTime          int64     `json:"create_time"`
+	Direction           Direction `json:"direction"`
+	RawProvider         string    `json:"raw_provider"`
+	ChatKind            ChatKind  `json:"chat_kind,omitempty"`
+	Conversation        string    `json:"chat_id,omitempty"`
 }
 
 func (e MessageEvent) Validate() error {
@@ -99,6 +133,7 @@ func (e MessageEvent) Normalize() MessageEvent {
 	if e.ChatKind == ChatKindRoom && strings.TrimSpace(e.RoomID) == "" {
 		e.RoomID = e.ChatID()
 	}
+	e = normalizeMessageEnvelope(e)
 	return e
 }
 
@@ -137,6 +172,266 @@ func (req SendTextRequest) Validate(defaultDevice string) (SendTextRequest, erro
 		return req, errors.New("text is required")
 	}
 	return req, nil
+}
+
+type SendActionRequest struct {
+	Device              string   `json:"device"`
+	OwnerWxID           string   `json:"owner_wxid,omitempty"`
+	WxIDs               []string `json:"wx_ids"`
+	Kind                string   `json:"kind"`
+	Text                string   `json:"text,omitempty"`
+	MediaKind           string   `json:"media_kind,omitempty"`
+	MediaMime           string   `json:"media_mime,omitempty"`
+	MediaName           string   `json:"media_name,omitempty"`
+	MediaURL            string   `json:"media_url,omitempty"`
+	MediaSize           int64    `json:"media_size,omitempty"`
+	MediaDurationMS     int      `json:"media_duration_ms,omitempty"`
+	DurationMS          int      `json:"duration_ms,omitempty"`
+	MediaBase64         string   `json:"media_base64,omitempty"`
+	QuoteMsgID          int64    `json:"quote_msg_id,omitempty"`
+	QuoteChatRecordID   int64    `json:"quote_chat_record_id,omitempty"`
+	QuoteTalker         string   `json:"quote_talker,omitempty"`
+	QuoteSenderWxID     string   `json:"quote_sender_wxid,omitempty"`
+	AppMsgTitle         string   `json:"appmsg_title,omitempty"`
+	AppMsgDescription   string   `json:"appmsg_description,omitempty"`
+	AppMsgURL           string   `json:"appmsg_url,omitempty"`
+	AppMsgAppName       string   `json:"appmsg_app_name,omitempty"`
+	AppMsgThumbURL      string   `json:"appmsg_thumb_url,omitempty"`
+	MiniProgramUsername string   `json:"mini_program_username,omitempty"`
+	MiniProgramPagePath string   `json:"mini_program_page_path,omitempty"`
+	MiniProgramAppID    string   `json:"mini_program_appid,omitempty"`
+	MiniProgramIconURL  string   `json:"mini_program_icon_url,omitempty"`
+	MiniProgramVersion  int      `json:"mini_program_version,omitempty"`
+	MiniProgramType     int      `json:"mini_program_type,omitempty"`
+	EmojiMD5            string   `json:"emoji_md5,omitempty"`
+	EmojiProductID      string   `json:"emoji_product_id,omitempty"`
+	RecordTitle         string   `json:"record_title,omitempty"`
+	RecordDescription   string   `json:"record_description,omitempty"`
+	RecordItemXML       string   `json:"recorditem_xml,omitempty"`
+	ForwardOriginal     bool     `json:"forward_original,omitempty"`
+	SourceChatRecordID  int64    `json:"source_chat_record_id,omitempty"`
+	SourceChatRecordIDs []int64  `json:"source_chat_record_ids,omitempty"`
+	LocationLatitude    *float64 `json:"location_latitude,omitempty"`
+	LocationLongitude   *float64 `json:"location_longitude,omitempty"`
+	LocationScale       int      `json:"location_scale,omitempty"`
+	LocationLabel       string   `json:"location_label,omitempty"`
+	LocationPoiName     string   `json:"location_poiname,omitempty"`
+	LocationInfoURL     string   `json:"location_info_url,omitempty"`
+	LocationPoiID       string   `json:"location_poi_id,omitempty"`
+	LocationFromPoiList bool     `json:"location_from_poi_list,omitempty"`
+	LocationPoiTips     string   `json:"location_poi_category_tips,omitempty"`
+}
+
+func (req SendActionRequest) Validate(defaultDevice string) (SendActionRequest, error) {
+	if strings.TrimSpace(req.Device) == "" {
+		req.Device = defaultDevice
+	}
+	req.Device = strings.TrimSpace(req.Device)
+	req.OwnerWxID = strings.TrimSpace(req.OwnerWxID)
+	req.Kind = strings.ToLower(strings.TrimSpace(req.Kind))
+	if req.Kind == "" {
+		req.Kind = OutboxKindText
+	}
+	if req.Device == "" {
+		return req, errors.New("device is required")
+	}
+	if len(req.WxIDs) == 0 {
+		return req, errors.New("wx_ids is required")
+	}
+	for i := range req.WxIDs {
+		req.WxIDs[i] = strings.TrimSpace(req.WxIDs[i])
+		if req.WxIDs[i] == "" {
+			return req, errors.New("wx_ids cannot contain empty values")
+		}
+	}
+	req.Text = strings.TrimSpace(req.Text)
+	req.MediaKind = strings.ToLower(strings.TrimSpace(req.MediaKind))
+	req.MediaMime = strings.TrimSpace(req.MediaMime)
+	req.MediaName = strings.TrimSpace(req.MediaName)
+	req.MediaURL = strings.TrimSpace(req.MediaURL)
+	req.MediaBase64 = strings.TrimSpace(req.MediaBase64)
+	req.QuoteTalker = strings.TrimSpace(req.QuoteTalker)
+	req.QuoteSenderWxID = strings.TrimSpace(req.QuoteSenderWxID)
+	req.AppMsgTitle = strings.TrimSpace(req.AppMsgTitle)
+	req.AppMsgDescription = strings.TrimSpace(req.AppMsgDescription)
+	req.AppMsgURL = strings.TrimSpace(req.AppMsgURL)
+	req.AppMsgAppName = strings.TrimSpace(req.AppMsgAppName)
+	req.AppMsgThumbURL = strings.TrimSpace(req.AppMsgThumbURL)
+	req.MiniProgramUsername = strings.TrimSpace(req.MiniProgramUsername)
+	req.MiniProgramPagePath = strings.TrimSpace(req.MiniProgramPagePath)
+	req.MiniProgramAppID = strings.TrimSpace(req.MiniProgramAppID)
+	req.MiniProgramIconURL = strings.TrimSpace(req.MiniProgramIconURL)
+	req.EmojiMD5 = strings.TrimSpace(req.EmojiMD5)
+	req.EmojiProductID = strings.TrimSpace(req.EmojiProductID)
+	req.RecordTitle = strings.TrimSpace(req.RecordTitle)
+	req.RecordDescription = strings.TrimSpace(req.RecordDescription)
+	req.RecordItemXML = strings.TrimSpace(req.RecordItemXML)
+	req.LocationLabel = strings.TrimSpace(req.LocationLabel)
+	req.LocationPoiName = strings.TrimSpace(req.LocationPoiName)
+	req.LocationInfoURL = strings.TrimSpace(req.LocationInfoURL)
+	req.LocationPoiID = strings.TrimSpace(req.LocationPoiID)
+	req.LocationPoiTips = strings.TrimSpace(req.LocationPoiTips)
+	if req.SourceChatRecordID <= 0 && len(req.SourceChatRecordIDs) == 1 {
+		req.SourceChatRecordID = req.SourceChatRecordIDs[0]
+	}
+	if req.QuoteMsgID <= 0 {
+		req.QuoteMsgID = req.QuoteChatRecordID
+	}
+	if req.QuoteChatRecordID <= 0 {
+		req.QuoteChatRecordID = req.QuoteMsgID
+	}
+	if req.MediaSize < 0 {
+		return req, errors.New("media_size cannot be negative")
+	}
+	if req.MediaDurationMS <= 0 && req.DurationMS > 0 {
+		req.MediaDurationMS = req.DurationMS
+	}
+	if req.MediaDurationMS < 0 {
+		return req, errors.New("media_duration_ms cannot be negative")
+	}
+	switch req.Kind {
+	case OutboxKindText:
+		if req.Text == "" {
+			return req, errors.New("text is required")
+		}
+	case OutboxKindImage, OutboxKindVideo, OutboxKindVoice, OutboxKindFile:
+		req.MediaKind = req.Kind
+		if req.MediaURL == "" && req.MediaBase64 == "" {
+			return req, errors.New("media_url or media_base64 is required")
+		}
+		if req.MediaURL != "" && !strings.HasPrefix(req.MediaURL, "/api/media/") {
+			return req, errors.New("media_url must start with /api/media/")
+		}
+	case OutboxKindEmoji:
+		req.MediaKind = OutboxKindEmoji
+		if req.SourceChatRecordID <= 0 && req.EmojiMD5 == "" {
+			return req, errors.New("source_chat_record_id or emoji_md5 is required")
+		}
+		if req.Text == "" {
+			req.Text = "[表情]"
+		}
+	case OutboxKindLocation:
+		if req.LocationLatitude == nil {
+			return req, errors.New("location_latitude is required")
+		}
+		if req.LocationLongitude == nil {
+			return req, errors.New("location_longitude is required")
+		}
+		if *req.LocationLatitude < -90 || *req.LocationLatitude > 90 {
+			return req, errors.New("location_latitude must be between -90 and 90")
+		}
+		if *req.LocationLongitude < -180 || *req.LocationLongitude > 180 {
+			return req, errors.New("location_longitude must be between -180 and 180")
+		}
+		if req.LocationScale < 0 {
+			return req, errors.New("location_scale cannot be negative")
+		}
+		if req.LocationScale == 0 {
+			req.LocationScale = 16
+		}
+		if req.LocationLabel == "" {
+			req.LocationLabel = firstNonEmpty(req.Text, "[位置]")
+		}
+		if req.LocationPoiName == "" {
+			req.LocationPoiName = req.LocationLabel
+		}
+		if req.Text == "" {
+			req.Text = req.LocationLabel
+		}
+	case OutboxKindQuote:
+		if req.Text == "" {
+			return req, errors.New("text is required")
+		}
+		if req.QuoteMsgID <= 0 {
+			return req, errors.New("quote_msg_id is required")
+		}
+	case OutboxKindLink:
+		if req.SourceChatRecordID <= 0 {
+			if req.AppMsgTitle == "" {
+				req.AppMsgTitle = req.Text
+			}
+			if req.AppMsgTitle == "" {
+				return req, errors.New("appmsg_title is required")
+			}
+			if req.AppMsgURL == "" {
+				return req, errors.New("appmsg_url is required")
+			}
+			if !strings.HasPrefix(strings.ToLower(req.AppMsgURL), "http://") && !strings.HasPrefix(strings.ToLower(req.AppMsgURL), "https://") {
+				return req, errors.New("appmsg_url must start with http:// or https://")
+			}
+		}
+		if req.Text == "" {
+			req.Text = firstNonEmpty(req.AppMsgTitle, "[链接]")
+		}
+	case OutboxKindMiniProgram:
+		if req.SourceChatRecordID <= 0 {
+			if req.AppMsgTitle == "" {
+				req.AppMsgTitle = req.Text
+			}
+			if req.AppMsgTitle == "" {
+				return req, errors.New("appmsg_title is required")
+			}
+			if req.MiniProgramUsername == "" {
+				return req, errors.New("mini_program_username is required")
+			}
+			if req.MiniProgramPagePath == "" {
+				return req, errors.New("mini_program_page_path is required")
+			}
+		}
+		if req.Text == "" {
+			req.Text = firstNonEmpty(req.AppMsgTitle, "[小程序]")
+		}
+	case OutboxKindChatHistory:
+		if req.ForwardOriginal {
+			if req.SourceChatRecordID <= 0 {
+				return req, errors.New("source_chat_record_id is required when forward_original is true")
+			}
+			if len(req.SourceChatRecordIDs) == 0 {
+				req.SourceChatRecordIDs = []int64{req.SourceChatRecordID}
+			}
+		}
+		if req.RecordItemXML == "" && len(req.SourceChatRecordIDs) == 0 {
+			return req, errors.New("recorditem_xml or source_chat_record_ids is required")
+		}
+		if req.RecordItemXML != "" {
+			if !looksLikeRecordItemXML(req.RecordItemXML) {
+				return req, errors.New("recorditem_xml must be recordinfo or recorditem XML")
+			}
+			if len([]byte(req.RecordItemXML)) > 1024*1024 {
+				return req, errors.New("recorditem_xml exceeds 1MB")
+			}
+		}
+		if len(req.SourceChatRecordIDs) > 50 {
+			return req, errors.New("source_chat_record_ids cannot exceed 50 items")
+		}
+		for _, id := range req.SourceChatRecordIDs {
+			if id <= 0 {
+				return req, errors.New("source_chat_record_ids cannot contain non-positive values")
+			}
+		}
+		if req.ForwardOriginal {
+			if req.Text == "" {
+				req.Text = firstNonEmpty(req.RecordTitle, "聊天记录")
+			}
+		} else {
+			if req.RecordTitle == "" {
+				req.RecordTitle = firstNonEmpty(req.Text, "聊天记录")
+			}
+			if req.Text == "" {
+				req.Text = req.RecordTitle
+			}
+		}
+	default:
+		return req, errors.New("kind must be text, image, video, voice, file, emoji, location, quote, link, mini_program, or chat_history")
+	}
+	return req, nil
+}
+
+func looksLikeRecordItemXML(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "<recordinfo") ||
+		strings.HasPrefix(value, "<recorditem") ||
+		strings.HasPrefix(value, "<![cdata[<recordinfo")
 }
 
 type ModuleRegistrationRequest struct {
@@ -240,17 +535,24 @@ func (req ModuleAckRequest) Validate(defaultDevice string) (ModuleAckRequest, er
 }
 
 type ModuleOutboxItem struct {
-	ID           int64  `json:"id"`
-	Device       string `json:"device"`
-	OwnerWxID    string `json:"owner_wxid,omitempty"`
-	WxID         string `json:"wxid"`
-	Text         string `json:"text"`
-	ChatRecordID int64  `json:"chat_record_id,omitempty"`
-	Status       string `json:"status"`
-	AttemptCount int    `json:"attempt_count"`
-	LastError    string `json:"last_error,omitempty"`
-	CreatedAt    string `json:"created_at,omitempty"`
-	UpdatedAt    string `json:"updated_at,omitempty"`
+	ID           int64           `json:"id"`
+	Device       string          `json:"device"`
+	OwnerWxID    string          `json:"owner_wxid,omitempty"`
+	WxID         string          `json:"wxid"`
+	Kind         string          `json:"kind"`
+	Text         string          `json:"text"`
+	PayloadJSON  json.RawMessage `json:"payload_json,omitempty"`
+	MediaKind    string          `json:"media_kind,omitempty"`
+	MediaMime    string          `json:"media_mime,omitempty"`
+	MediaName    string          `json:"media_name,omitempty"`
+	MediaURL     string          `json:"media_url,omitempty"`
+	MediaSize    int64           `json:"media_size,omitempty"`
+	ChatRecordID int64           `json:"chat_record_id,omitempty"`
+	Status       string          `json:"status"`
+	AttemptCount int             `json:"attempt_count"`
+	LastError    string          `json:"last_error,omitempty"`
+	CreatedAt    string          `json:"created_at,omitempty"`
+	UpdatedAt    string          `json:"updated_at,omitempty"`
 }
 
 type ModuleContactSnapshotRequest struct {

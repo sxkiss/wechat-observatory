@@ -46,13 +46,13 @@ rg -n "old-project-name|old-business-name|old-role-name" .
 GitHub 仓库描述可以使用：
 
 ```text
-WeChat Observatory is a self-hosted LSPosed-based WeChat gateway for observing messages, syncing contacts, and manually sending text from a Web console.
+WeChat Observatory is a self-hosted LSPosed-based WeChat gateway for observing messages, syncing contacts, and sending Action Outbox messages through a phone module.
 ```
 
 中文描述：
 
 ```text
-微信看台：基于 LSPosed 的自托管微信网关，用于消息观测、通讯录同步和 Web 手动发送文本。
+微信看台：基于 LSPosed 的自托管微信网关，用于消息观测、通讯录同步和手机模块出站发送。
 ```
 
 ## 发布后

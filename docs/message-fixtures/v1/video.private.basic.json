@@ -1,0 +1,36 @@
+{
+  "sample_id": "video.private.basic",
+  "kind": "video",
+  "direction": "inbound_outbound",
+  "wechat_type": [
+    43,
+    62
+  ],
+  "verification": "user-confirmed",
+  "input": {
+    "action_kind": "video",
+    "target": "<peer>",
+    "media_url": "/api/media/<device>/<date>/<file>"
+  },
+  "expected": {
+    "ack_status": "sent",
+    "message_kind": "video",
+    "message_type_any_of": [
+      43,
+      62
+    ],
+    "media_kind": "video",
+    "media_url_present": true,
+    "evidence": [
+      "outbox.kind=video",
+      "wechat.local_db.message.type=43|62"
+    ]
+  },
+  "redactions": [
+    "owner_wxid",
+    "target_wxid",
+    "media_base64",
+    "media_file_bytes"
+  ]
+}
+
