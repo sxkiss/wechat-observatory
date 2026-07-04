@@ -73,7 +73,8 @@ enabled=1
 bridge_url=http://192.168.1.10:8088
 api_key=wg_dev_key
 poll_interval_ms=1000
-poll_limit=1
+poll_limit=4
+outbox_parallelism=2
 contact_sync_interval_ms=600000
 contact_sync_limit=1000
 contact_include_chatrooms=1
@@ -86,6 +87,13 @@ Restart WeChat after changing config.
 `poll_interval_ms` controls how often the module checks the gateway outbox.
 The worker currently sleeps at least 1000ms between polls, so values below
 1000 do not make sends faster.
+
+`poll_limit` controls how many leased outbox items the module requests per wake.
+The gateway currently caps one batch at 4 items.
+
+`outbox_parallelism` controls how many outbox lanes the module may execute in
+parallel. The dispatcher keeps the same `wxid + kind` lane serialized so
+message DB verification does not race on the same target and message type.
 
 On Android builds where the WeChat process cannot resolve the module config
 provider, the module log can show `read config from provider returned null

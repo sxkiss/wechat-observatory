@@ -39,8 +39,10 @@ The gateway is the observation and manual-send point:
    gateway.
 3. The gateway stores the event and publishes it to the admin console.
 4. An operator or trusted adapter may queue an Action Outbox v1 item.
-5. The module receives a queued item through WebSocket or HTTP polling, sends it
-   inside WeChat, and ACKs the item back to the gateway.
+5. The module receives one leased batch through WebSocket or HTTP polling. The
+   gateway prefers to spread each batch across different `wxid + kind` lanes,
+   then the module dispatches each lane inside WeChat and ACKs the batch back
+   to the gateway.
 
 ## Boundaries
 
@@ -69,8 +71,10 @@ The Android module owns WeChat process I/O only:
 - Register current WeChat login.
 - Observe received/sent WeChat events.
 - Sync current contacts.
-- Pull or receive queued outbound text.
-- Send text inside WeChat and ACK the result.
+- Pull or receive leased outbound action batches.
+- Prefer lane-balanced outbox batches from the gateway.
+- Dispatch outbound actions inside WeChat, keeping the same `wxid + kind` lane serialized.
+- ACK outbound results back to the gateway.
 
 The module must not parse command text or mutate external business state.
 

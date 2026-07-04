@@ -1,3 +1,9 @@
+/*
+ * @input Android ContentProvider API, SharedPreferences bridge_config storage
+ * @output Read-only config cursor for hooked WeChat processes to consume module settings
+ * @position Process boundary adapter that exposes module settings beyond the launcher app process
+ * @auto-doc Update header and folder INDEX.md when this file changes
+ */
 package cc.wechat.observatory;
 
 import android.content.ContentProvider;
@@ -19,6 +25,7 @@ public final class BridgeConfigProvider extends ContentProvider {
             "api_key",
             "poll_interval_ms",
             "poll_limit",
+            "outbox_parallelism",
             "contact_sync_interval_ms",
             "contact_sync_limit",
             "contact_include_chatrooms",

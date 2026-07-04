@@ -1,3 +1,7 @@
+// @input: context, crypto/rand, encoding/json, sync, time; internal/config device and api key state
+// @output: Service runtime for module registration, message ingest, and outbox dispatch orchestration
+// @position: Core bridge domain service between HTTP handlers and persistence/outbox backends
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -30,7 +34,7 @@ type Service struct {
 	outboxNotify   map[string]map[chan struct{}]struct{}
 }
 
-const maxOutboxPollBatch = 1
+const maxOutboxPollBatch = 4
 
 type Config struct {
 	DefaultDevice string

@@ -92,3 +92,31 @@ cp deploy/k3s/secrets.example.yaml deploy/k3s/secrets.yaml
 - 至少放在 VPN、内网、堡垒机或反向代理鉴权之后。
 - API Key 泄露后应立即停用或删除。
 - 删除 API Key 会注销对应模块身份，手机端需要填写新的 API Key 后重新注册。
+## GitHub Actions
+
+仓库已经提供两条 CI 工作流：
+
+- `android-build.yml`
+  - 使用 GitHub Hosted Runner 安装 Android SDK，并通过仓库内 Gradle Wrapper 构建 debug APK
+  - 构建 `android-module` 的 debug APK 并上传 artifact
+- `android-release.yml`
+  - 在 `v*` 标签或手动触发时构建 release APK
+  - 如果配置 Android 签名 Secrets，会输出已签名 release APK
+  - Release 资产命名为 `wechat-observatory-android-<tag>-<signed|unsigned>.apk`
+- `docker-build-on-commit.yml`
+  - 参考 `allbot` 项目，使用 Buildx 构建并推送 `linux/amd64` 与 `linux/arm64` 镜像
+- `docker-release-on-tag.yml`
+  - 在 `v*` 标签或手动触发时发布 release 镜像
+  - 同时向 GitHub Release 追加镜像标签说明
+
+Docker 工作流依赖以下 GitHub Secrets：
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+Android release 签名可选，依赖以下 GitHub Secrets：
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`

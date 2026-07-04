@@ -1,3 +1,7 @@
+// @input: testing, httptest, internal/config, bridge service collaborators and fakes
+// @output: Behavioral tests for bridge service registration, ingress, and outbox transport semantics
+// @position: Regression suite for bridge domain logic and module-facing protocols
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -1704,9 +1708,15 @@ func TestModuleOutboxWebSocketPushAndAck(t *testing.T) {
 	}
 }
 
-func TestModuleOutboxPollIsSerializedForWeChatSender(t *testing.T) {
+func TestModuleOutboxPollCapsBatchForWeChatSender(t *testing.T) {
 	service := newTestService("")
-	for _, text := range []string{"first queued reply", "second queued reply"} {
+	for _, text := range []string{
+		"first queued reply",
+		"second queued reply",
+		"third queued reply",
+		"fourth queued reply",
+		"fifth queued reply",
+	} {
 		if _, err := service.SendText(t.Context(), SendTextRequest{
 			Device: "phone-a",
 			WxIDs:  []string{"wxid_friend"},
@@ -1724,8 +1734,60 @@ func TestModuleOutboxPollIsSerializedForWeChatSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Text != "first queued reply" {
-		t.Fatalf("unexpected serialized poll items: %+v", items)
+	if len(items) != 4 {
+		t.Fatalf("unexpected batched poll items: %+v", items)
+	}
+	if items[0].Text != "first queued reply" ||
+		items[1].Text != "second queued reply" ||
+		items[2].Text != "third queued reply" ||
+		items[3].Text != "fourth queued reply" {
+		t.Fatalf("unexpected batched poll order: %+v", items)
+	}
+}
+
+func TestModuleOutboxPollSpreadsLeaseAcrossLanes(t *testing.T) {
+	service := newTestService("")
+	for _, item := range []struct {
+		wxid string
+		text string
+	}{
+		{wxid: "wxid_friend_a", text: "lane-a-1"},
+		{wxid: "wxid_friend_a", text: "lane-a-2"},
+		{wxid: "wxid_friend_a", text: "lane-a-3"},
+		{wxid: "wxid_friend_b", text: "lane-b-1"},
+		{wxid: "wxid_friend_c", text: "lane-c-1"},
+	} {
+		if _, err := service.SendText(t.Context(), SendTextRequest{
+			Device: "phone-a",
+			WxIDs:  []string{item.wxid},
+			Text:   item.text,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items, err := service.PollOutbox(t.Context(), ModulePollRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Limit:  4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 4 {
+		t.Fatalf("unexpected batched poll items: %+v", items)
+	}
+	got := []string{
+		items[0].Text,
+		items[1].Text,
+		items[2].Text,
+		items[3].Text,
+	}
+	want := []string{"lane-a-1", "lane-a-2", "lane-b-1", "lane-c-1"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected lane-balanced lease order: got=%v want=%v", got, want)
+		}
 	}
 }
 

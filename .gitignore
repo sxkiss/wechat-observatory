@@ -1,5 +1,6 @@
 .env
 .idea/
+.serena/
 local.properties
 data/
 .tmp/
@@ -24,7 +25,6 @@ android-module/app/build/
 backups/
 __pycache__/
 *.py[cod]
-.Destination}}{{end}}
 *.db
 *.sqlite
 *.sqlite3
@@ -35,4 +35,3 @@ __pycache__/
 *.key
 
 # Stray local shell/template output
- .Destination}}{{end}}

@@ -1,3 +1,7 @@
+// @input: database/sql, MySQL driver, bridge/config domain models, JSON helpers
+// @output: MySQL-backed persistence, admin projections, and lane-aware outbox lease storage
+// @position: Durable storage adapter for the bridge runtime and admin views
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package mysql
 
 import (
@@ -715,7 +719,7 @@ func (s *Store) PollReplyActions(ctx context.Context, req bridge.ModulePollReque
 	}()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id
+		SELECT id, wxid, kind
 		FROM bridge_module_outbox
 		WHERE device = ?
 			AND owner_wxid = ?
@@ -723,29 +727,35 @@ func (s *Store) PollReplyActions(ctx context.Context, req bridge.ModulePollReque
 				status = 'pending'
 				OR (status = 'leased' AND (lease_until IS NULL OR lease_until < CURRENT_TIMESTAMP))
 			)
-		ORDER BY id ASC
-		LIMIT ? FOR UPDATE`,
+		ORDER BY id ASC FOR UPDATE`,
 		strings.TrimSpace(req.Device),
 		strings.TrimSpace(req.WxID),
-		limit,
 	)
 	if err != nil {
 		return nil, err
 	}
-	var ids []int64
+	candidates := make([]bridge.OutboxLeaseCandidate, 0, limit)
+	position := 0
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var candidate bridge.OutboxLeaseCandidate
+		candidate.Position = position
+		if err := rows.Scan(&candidate.ID, &candidate.WxID, &candidate.Kind); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		candidates = append(candidates, candidate)
+		position++
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	selected := bridge.SelectOutboxLeaseCandidates(candidates, limit)
+	ids := make([]int64, 0, len(selected))
+	for _, candidate := range selected {
+		ids = append(ids, candidate.ID)
 	}
 	for _, id := range ids {
 		if _, err := tx.ExecContext(ctx, `

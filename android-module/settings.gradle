@@ -1,3 +1,7 @@
+// @input: Gradle repository declarations for AGP, Maven Central, Google, and Xposed API packages
+// @output: Android module project name and included app module definition
+// @position: Android settings entrypoint that keeps local and CI dependency resolution aligned
+// @auto-doc: Update header and folder INDEX.md when this file changes
 pluginManagement {
     repositories {
         google()

@@ -1,3 +1,9 @@
+/*
+ * @input SharedPreferences, provider/file mirrors, XSharedPreferences, Android Context
+ * @output BridgeConfig runtime snapshot for module workers and send dispatch
+ * @position Module configuration loader and normalization layer shared by the hooked WeChat process
+ * @auto-doc Update header and folder INDEX.md when this file changes
+ */
 package cc.wechat.observatory.config;
 
 import android.content.Context;
@@ -33,6 +39,7 @@ public final class BridgeConfig {
     public String nickname;
     public long pollIntervalMs;
     public int pollLimit;
+    public int outboxParallelism;
     public long contactSyncIntervalMs;
     public int contactSyncLimit;
     public boolean includeChatrooms;
@@ -54,7 +61,8 @@ public final class BridgeConfig {
         config.apiKey = setting(properties, "api_key", "");
         config.nickname = "";
         config.pollIntervalMs = longSetting(properties, "poll_interval_ms", 1000L);
-        config.pollLimit = (int) longSetting(properties, "poll_limit", 20L);
+        config.pollLimit = boundedIntSetting(properties, "poll_limit", 4, 1, 4);
+        config.outboxParallelism = boundedIntSetting(properties, "outbox_parallelism", 2, 1, 4);
         config.contactSyncIntervalMs = longSetting(properties, "contact_sync_interval_ms", 600000L);
         config.contactSyncLimit = (int) longSetting(properties, "contact_sync_limit", 1000L);
         config.includeChatrooms = booleanSetting(properties, "contact_include_chatrooms", true);
@@ -331,6 +339,17 @@ public final class BridgeConfig {
         }
     }
 
+    private static int boundedIntSetting(Properties properties, String name, int fallback, int min, int max) {
+        long value = longSetting(properties, name, fallback);
+        if (value < min) {
+            return min;
+        }
+        if (value > max) {
+            return max;
+        }
+        return (int) value;
+    }
+
     private static String configSignature(Properties properties) {
         StringBuilder out = new StringBuilder();
         for (String key : new String[]{
@@ -339,6 +358,7 @@ public final class BridgeConfig {
                 "api_key",
                 "poll_interval_ms",
                 "poll_limit",
+                "outbox_parallelism",
                 "contact_sync_interval_ms",
                 "contact_sync_limit",
                 "contact_include_chatrooms",

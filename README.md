@@ -127,9 +127,7 @@ npm run build
 
 ### 5. 构建 Android 模块
 
-当前仓库没有强制要求提交 Gradle Wrapper。推荐在发布前补充 Wrapper；没有 Wrapper 时，可用 Android Studio 打开 `android-module` 并执行 debug 构建。
-
-如果仓库已包含 Gradle Wrapper：
+当前仓库已包含 Gradle Wrapper，推荐统一使用：
 
 ```powershell
 cd android-module
@@ -137,6 +135,27 @@ cd android-module
 ```
 
 安装 APK 后，在 LSPosed 中启用模块并勾选微信作用域，然后重启手机或重启微信。
+
+GitHub Actions 已补充 Android 构建工作流：
+
+- `.github/workflows/android-build.yml`
+- 触发条件：`android-module/**` 相关变更的 `push` / `pull_request` / `workflow_dispatch`
+- 产物：`wechat-observatory-android-debug-apk`
+
+Android release 工作流：
+
+- `.github/workflows/android-release.yml`
+- 触发条件：`v*` 标签推送或手动触发
+- 默认产物：`wechat-observatory-android-release-apk`
+- Release 文件命名：`wechat-observatory-android-<tag>-<signed|unsigned>.apk`
+- 如果提供签名 Secrets，会输出已签名 release APK，并附加到 GitHub Release
+
+Android release 签名需要以下 GitHub Secrets：
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
 
 ### 6. 手机模块配置
 
@@ -159,6 +178,30 @@ curl -fsS http://127.0.0.1:8088/healthz
 ```
 
 更多说明见 [docs/deployment.md](docs/deployment.md)。
+
+GitHub Actions 已补充容器镜像工作流，参考 `allbot` 项目的做法：
+
+- `.github/workflows/docker-build-on-commit.yml`
+- 触发条件：`main` 分支上的容器/后端/前端构建相关变更
+- 构建目标：`linux/amd64,linux/arm64`
+- 推送标签：
+  - `${DOCKERHUB_USERNAME}/wechat-observatory:latest`
+  - `${DOCKERHUB_USERNAME}/wechat-observatory:<short-sha>`
+
+需要在 GitHub 仓库 Secrets 中提供：
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+标签发布工作流：
+
+- `.github/workflows/docker-release-on-tag.yml`
+- 触发条件：`v*` 标签推送或手动触发
+- 推送标签：
+  - `${DOCKERHUB_USERNAME}/wechat-observatory:latest`
+  - `${DOCKERHUB_USERNAME}/wechat-observatory:<git-tag>`
+  - `${DOCKERHUB_USERNAME}/wechat-observatory:<short-sha>`
+- GitHub Release 会同步补充镜像标签说明
 
 ## 常用 API
 

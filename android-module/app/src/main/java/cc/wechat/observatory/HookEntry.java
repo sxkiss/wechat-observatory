@@ -1,3 +1,9 @@
+/*
+ * @input LSPosed/Xposed hook callbacks, BridgeConfig, WeChat runtime classes, HTTP/WebSocket transport
+ * @output Message observation uploads, contact snapshots, and Action Outbox send execution inside WeChat
+ * @position Central Android module runtime that bridges WeChat internals with the gateway service
+ * @auto-doc Update header and folder INDEX.md when this file changes
+ */
 package cc.wechat.observatory;
 
 import android.content.ContentValues;
@@ -32,6 +38,9 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -140,6 +149,34 @@ public final class HookEntry implements IXposedHookLoadPackage {
         File file;
         long distanceMs = Long.MAX_VALUE;
         long modifiedMs = 0L;
+    }
+
+    private static final class OutboxDispatchItem {
+        final int index;
+        final JSONObject item;
+        final long id;
+        final String wxid;
+        final String kind;
+        final String laneKey;
+
+        OutboxDispatchItem(int index, JSONObject item, long id, String wxid, String kind) {
+            this.index = index;
+            this.item = item;
+            this.id = id;
+            this.wxid = wxid == null ? "" : wxid.trim();
+            this.kind = kind == null ? "text" : kind;
+            this.laneKey = this.wxid + "|" + this.kind;
+        }
+    }
+
+    private static final class OutboxAckEntry {
+        final int index;
+        final JSONObject ack;
+
+        OutboxAckEntry(int index, JSONObject ack) {
+            this.index = index;
+            this.ack = ack;
+        }
     }
 
     @Override
@@ -2974,7 +3011,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
         String path = trimRight(base.getPath(), "/") + "/module/outbox/ws"
                 + "?api_key=" + urlEncode(config.apiKey)
                 + "&device=" + urlEncode(config.device)
-                + "&wxid=" + urlEncode(config.selfWxid);
+                + "&wxid=" + urlEncode(config.selfWxid)
+                + "&limit=" + config.pollLimit;
         if (path.startsWith("//")) {
             path = path.substring(1);
         }
@@ -3049,56 +3087,177 @@ public final class HookEntry implements IXposedHookLoadPackage {
     }
 
     private static JSONArray handleOutboxItems(JSONArray items, ClassLoader classLoader, BridgeConfig config) throws Exception {
-        JSONArray ackItems = new JSONArray();
+        List<OutboxDispatchItem> dispatchItems = buildOutboxDispatchItems(items);
+        if (dispatchItems.isEmpty()) {
+            return new JSONArray();
+        }
+        int parallelism = normalizeOutboxParallelism(config, dispatchItems.size());
+        if (parallelism <= 1 || dispatchItems.size() <= 1) {
+            return toAckJSONArray(processOutboxLane(dispatchItems, classLoader, config));
+        }
+
+        LinkedHashMap<String, List<OutboxDispatchItem>> lanes = new LinkedHashMap<>();
+        for (OutboxDispatchItem dispatchItem : dispatchItems) {
+            List<OutboxDispatchItem> lane = lanes.get(dispatchItem.laneKey);
+            if (lane == null) {
+                lane = new ArrayList<>();
+                lanes.put(dispatchItem.laneKey, lane);
+            }
+            lane.add(dispatchItem);
+        }
+        if (lanes.size() <= 1) {
+            return toAckJSONArray(processOutboxLane(dispatchItems, classLoader, config));
+        }
+
+        int workerCount = Math.min(parallelism, lanes.size());
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount, new ThreadFactory() {
+            private int nextIndex = 1;
+
+            @Override
+            public Thread newThread(Runnable runnable) {
+                Thread thread = new Thread(runnable, "wechat-observatory-outbox-lane-" + nextIndex++);
+                thread.setDaemon(true);
+                return thread;
+            }
+        });
+        try {
+            List<FutureTask<List<OutboxAckEntry>>> tasks = new ArrayList<>();
+            for (List<OutboxDispatchItem> laneItems : lanes.values()) {
+                FutureTask<List<OutboxAckEntry>> task = new FutureTask<>(new Callable<List<OutboxAckEntry>>() {
+                    @Override
+                    public List<OutboxAckEntry> call() throws Exception {
+                        return processOutboxLane(laneItems, classLoader, config);
+                    }
+                });
+                tasks.add(task);
+                executor.execute(task);
+            }
+            List<OutboxAckEntry> ackEntries = new ArrayList<>();
+            for (FutureTask<List<OutboxAckEntry>> task : tasks) {
+                ackEntries.addAll(task.get());
+            }
+            return toAckJSONArray(ackEntries);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private static List<OutboxDispatchItem> buildOutboxDispatchItems(JSONArray items) throws Exception {
+        List<OutboxDispatchItem> dispatchItems = new ArrayList<>();
         if (items == null) {
-            return ackItems;
+            return dispatchItems;
         }
         for (int i = 0; i < items.length(); i++) {
             JSONObject item = items.getJSONObject(i);
-            long id = item.optLong("id", 0);
-            String wxid = item.optString("wxid", "");
-            String text = item.optString("text", "");
-            String kind = item.optString("kind", "");
-            if (isBlank(kind)) {
-                kind = isBlank(item.optString("media_kind", "")) ? "text" : item.optString("media_kind", "");
-            }
-            kind = kind.trim().toLowerCase(Locale.US);
-            if (id <= 0) {
+            dispatchItems.add(new OutboxDispatchItem(
+                    i,
+                    item,
+                    item.optLong("id", 0L),
+                    item.optString("wxid", ""),
+                    outboxKind(item)));
+        }
+        return dispatchItems;
+    }
+
+    private static int normalizeOutboxParallelism(BridgeConfig config, int itemCount) {
+        int parallelism = config == null ? 1 : config.outboxParallelism;
+        if (parallelism <= 0) {
+            parallelism = 1;
+        }
+        if (parallelism > 4) {
+            parallelism = 4;
+        }
+        return Math.min(parallelism, Math.max(1, itemCount));
+    }
+
+    private static List<OutboxAckEntry> processOutboxLane(List<OutboxDispatchItem> laneItems, ClassLoader classLoader, BridgeConfig config) throws Exception {
+        List<OutboxAckEntry> ackEntries = new ArrayList<>();
+        for (OutboxDispatchItem dispatchItem : laneItems) {
+            if (dispatchItem.id <= 0L) {
                 continue;
             }
             SendResult result;
-            if (isBlank(wxid)) {
-                result = SendResult.failed("wxid is required");
-            } else if ("text".equals(kind)) {
-                result = isBlank(text)
-                        ? SendResult.failed("text is required")
-                        : sendText(classLoader, wxid, text);
-            } else if ("image".equals(kind)) {
-                result = sendImageAction(config, classLoader, wxid, item);
-            } else if ("video".equals(kind)) {
-                result = sendVideoAction(config, classLoader, wxid, item);
-            } else if ("voice".equals(kind)) {
-                result = sendVoiceAction(config, classLoader, wxid, item);
-            } else if ("file".equals(kind)) {
-                result = sendFileAction(config, classLoader, wxid, item);
-            } else if ("emoji".equals(kind)) {
-                result = sendEmojiAction(config, classLoader, wxid, item);
-            } else if ("location".equals(kind)) {
-                result = sendLocationAction(config, classLoader, wxid, text, item);
-            } else if ("quote".equals(kind)) {
-                result = sendQuoteAction(config, classLoader, wxid, text, item);
-            } else if ("link".equals(kind)) {
-                result = sendLinkAction(config, classLoader, wxid, text, item);
-            } else if ("mini_program".equals(kind)) {
-                result = sendMiniProgramAction(config, classLoader, wxid, text, item);
-            } else if ("chat_history".equals(kind)) {
-                result = sendChatHistoryAction(config, classLoader, wxid, text, item);
-            } else {
-                result = SendResult.failed("unsupported outbox kind: " + kind);
+            try {
+                result = sendOutboxItem(dispatchItem, classLoader, config);
+            } catch (Throwable t) {
+                result = SendResult.failed("outbox lane send failed: " + shortError(t));
             }
-            ackItems.put(outboxAck(id, result));
+            ackEntries.add(new OutboxAckEntry(dispatchItem.index, outboxAck(dispatchItem.id, result)));
+        }
+        return ackEntries;
+    }
+
+    private static JSONArray toAckJSONArray(List<OutboxAckEntry> ackEntries) {
+        Collections.sort(ackEntries, new Comparator<OutboxAckEntry>() {
+            @Override
+            public int compare(OutboxAckEntry left, OutboxAckEntry right) {
+                return left.index - right.index;
+            }
+        });
+        JSONArray ackItems = new JSONArray();
+        for (OutboxAckEntry entry : ackEntries) {
+            ackItems.put(entry.ack);
         }
         return ackItems;
+    }
+
+    private static SendResult sendOutboxItem(OutboxDispatchItem dispatchItem, ClassLoader classLoader, BridgeConfig config) {
+        if (dispatchItem == null) {
+            return SendResult.failed("outbox item is required");
+        }
+        if (isBlank(dispatchItem.wxid)) {
+            return SendResult.failed("wxid is required");
+        }
+        JSONObject item = dispatchItem.item;
+        String text = item.optString("text", "");
+        if ("text".equals(dispatchItem.kind)) {
+            return isBlank(text)
+                    ? SendResult.failed("text is required")
+                    : sendText(classLoader, dispatchItem.wxid, text);
+        }
+        if ("image".equals(dispatchItem.kind)) {
+            return sendImageAction(config, classLoader, dispatchItem.wxid, item);
+        }
+        if ("video".equals(dispatchItem.kind)) {
+            return sendVideoAction(config, classLoader, dispatchItem.wxid, item);
+        }
+        if ("voice".equals(dispatchItem.kind)) {
+            return sendVoiceAction(config, classLoader, dispatchItem.wxid, item);
+        }
+        if ("file".equals(dispatchItem.kind)) {
+            return sendFileAction(config, classLoader, dispatchItem.wxid, item);
+        }
+        if ("emoji".equals(dispatchItem.kind)) {
+            return sendEmojiAction(config, classLoader, dispatchItem.wxid, item);
+        }
+        if ("location".equals(dispatchItem.kind)) {
+            return sendLocationAction(config, classLoader, dispatchItem.wxid, text, item);
+        }
+        if ("quote".equals(dispatchItem.kind)) {
+            return sendQuoteAction(config, classLoader, dispatchItem.wxid, text, item);
+        }
+        if ("link".equals(dispatchItem.kind)) {
+            return sendLinkAction(config, classLoader, dispatchItem.wxid, text, item);
+        }
+        if ("mini_program".equals(dispatchItem.kind)) {
+            return sendMiniProgramAction(config, classLoader, dispatchItem.wxid, text, item);
+        }
+        if ("chat_history".equals(dispatchItem.kind)) {
+            return sendChatHistoryAction(config, classLoader, dispatchItem.wxid, text, item);
+        }
+        return SendResult.failed("unsupported outbox kind: " + dispatchItem.kind);
+    }
+
+    private static String outboxKind(JSONObject item) {
+        if (item == null) {
+            return "text";
+        }
+        String kind = item.optString("kind", "");
+        if (isBlank(kind)) {
+            kind = isBlank(item.optString("media_kind", "")) ? "text" : item.optString("media_kind", "");
+        }
+        kind = kind.trim().toLowerCase(Locale.US);
+        return isBlank(kind) ? "text" : kind;
     }
 
     private static JSONObject outboxAck(long id, SendResult result) throws Exception {

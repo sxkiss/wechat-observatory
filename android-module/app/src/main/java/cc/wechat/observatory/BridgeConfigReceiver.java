@@ -1,3 +1,9 @@
+/*
+ * @input Android broadcast intents, BridgeConfigProvider.CONFIG_KEYS, SharedPreferences
+ * @output Persisted module config updates mirrored to storage readable by the hooked WeChat process
+ * @position External config ingest path for automation or adb-driven module configuration
+ * @auto-doc Update header and folder INDEX.md when this file changes
+ */
 package cc.wechat.observatory;
 
 import android.content.BroadcastReceiver;

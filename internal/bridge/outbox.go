@@ -1,3 +1,7 @@
+// @input: context, strings, sync, time; bridge outbox request and reply domain types
+// @output: In-memory outbox backend with lease, ack, and lane-aware batch selection behavior
+// @position: Default non-MySQL outbox implementation used by the bridge service and tests
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -61,11 +65,8 @@ func (o *MemoryOutbox) PollReplyActions(_ context.Context, req ModulePollRequest
 		limit = 20
 	}
 	now := o.now()
-	out := []ModuleOutboxItem{}
+	candidates := make([]OutboxLeaseCandidate, 0, len(o.items))
 	for i := range o.items {
-		if len(out) >= limit {
-			break
-		}
 		if o.items[i].Device != req.Device {
 			continue
 		}
@@ -75,6 +76,17 @@ func (o *MemoryOutbox) PollReplyActions(_ context.Context, req ModulePollRequest
 		if o.items[i].Status != "pending" && !(o.items[i].Status == "leased" && o.items[i].leaseUntil.Before(now)) {
 			continue
 		}
+		candidates = append(candidates, OutboxLeaseCandidate{
+			ID:       o.items[i].ID,
+			Position: i,
+			WxID:     o.items[i].WxID,
+			Kind:     o.items[i].Kind,
+		})
+	}
+	selectedCandidates := SelectOutboxLeaseCandidates(candidates, limit)
+	out := make([]ModuleOutboxItem, 0, len(selectedCandidates))
+	for _, candidate := range selectedCandidates {
+		i := candidate.Position
 		o.items[i].Status = "leased"
 		o.items[i].AttemptCount++
 		o.items[i].leaseUntil = now.Add(defaultOutboxLease)

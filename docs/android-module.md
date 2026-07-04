@@ -31,6 +31,8 @@ cd android-module
 - 服务端地址：例如 `http://192.168.1.10:8088`
 - API Key：从 Web 管理台生成
 - 轮询间隔：默认 `1000`
+- 单次拉取数量：默认 `4`
+- 出站并发度：默认 `2`
 - 通讯录同步间隔：默认 `600000`
 - 是否包含群聊：默认 `1`
 - 是否上传媒体：默认 `1`
@@ -47,7 +49,8 @@ cd android-module
 | `bridge_url` | `http://192.168.1.10:8088` | 服务端地址 |
 | `api_key` | 空 | Web 管理台生成的 API Key |
 | `poll_interval_ms` | `1000` | HTTP 轮询出站消息间隔 |
-| `poll_limit` | `1` | 每次最多拉取条数，服务端当前只租约一条 |
+| `poll_limit` | `4` | 每次最多拉取条数，服务端当前最多租约四条 |
+| `outbox_parallelism` | `2` | 模块同批次的最大并发 lane 数；同 `wxid + kind` 仍顺序发送 |
 | `contact_sync_interval_ms` | `600000` | 通讯录同步间隔，`0` 表示关闭 |
 | `contact_sync_limit` | `1000` | 一次同步联系人数量上限 |
 | `contact_include_chatrooms` | `1` | 是否同步群聊 |
@@ -70,7 +73,7 @@ POST /module/register
 
 1. 管理台调用兼容接口 `POST /api/send/text` 或 Action 接口 `POST /api/send/action` 创建出站任务；外部适配器优先使用 `/api/v1/messages/{kind}`。
 2. 服务端通过 WebSocket 唤醒模块。
-3. 模块按 `kind` 分发并在微信进程里执行发送。
+3. 服务端优先把同批次 outbox 分散到不同 `wxid + kind` lane，模块再按 lane 调度；同 lane 顺序发送，不同 lane 可并发执行。
 4. 模块通过 WebSocket 或 HTTP ACK 回报结果。
 
 当前 Action Outbox v1 已覆盖 `text`、`image`、`video`、`voice`、`file`、`emoji`、`location`、`quote`、`link`、`mini_program`、`chat_history`。红包、转账、系统消息等只做观测或标记为不支持发送，实际可用状态以 `GET /api/v1/capabilities` 为准。

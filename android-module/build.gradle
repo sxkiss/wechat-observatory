@@ -1,3 +1,7 @@
+// @input: Android Gradle Plugin version pin used by app module and CI wrapper tasks
+// @output: Root Android build plugin configuration for the LSPosed companion module
+// @position: Android build entrypoint shared by local wrapper runs and GitHub Actions jobs
+// @auto-doc: Update header and folder INDEX.md when this file changes
 plugins {
     id "com.android.application" version "8.7.3" apply false
 }

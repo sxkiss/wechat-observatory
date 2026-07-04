@@ -1,0 +1,71 @@
+# Docker release workflow for version tags.
+# Publishes semver and latest image tags for tagged releases.
+name: Docker Release on Tag
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+          install: true
+
+      - name: Create multi-arch builder
+        run: |
+          docker buildx create --name multiarch --use
+          docker buildx inspect --bootstrap
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute release metadata
+        run: |
+          echo "GIT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          builder: multiarch
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:${{ env.RELEASE_TAG }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:${{ env.GIT_SHA }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:latest
+          cache-to: type=inline,mode=max
+
+      - name: Publish container release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          body: |
+            ## Container Images
+
+            - `${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:latest`
+            - `${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:${{ env.RELEASE_TAG }}`
+            - `${{ secrets.DOCKERHUB_USERNAME }}/wechat-observatory:${{ env.GIT_SHA }}`

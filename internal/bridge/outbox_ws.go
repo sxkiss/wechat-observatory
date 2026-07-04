@@ -1,3 +1,7 @@
+// @input: net/http, encoding/json, websocket framing helpers; Service outbox poll/ack methods
+// @output: Module outbox websocket transport with wake, poll, and ack message handling
+// @position: Real-time outbox delivery path for phone modules on top of bridge.Service
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -11,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +43,7 @@ func (s *HTTPServer) outboxWebSocket(w http.ResponseWriter, r *http.Request) {
 	apiKey := strings.TrimSpace(r.URL.Query().Get("api_key"))
 	device := strings.TrimSpace(r.URL.Query().Get("device"))
 	wxid := strings.TrimSpace(r.URL.Query().Get("wxid"))
+	limit := websocketOutboxPollLimit(r)
 	if device == "" {
 		device = s.service.DefaultDevice()
 	}
@@ -74,7 +80,12 @@ func (s *HTTPServer) outboxWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		case msg := <-outgoing:
 			if msg.Type == "wake" {
-				items, err := s.service.PollOutbox(ctx, ModulePollRequest{APIKey: apiKey, Device: device, WxID: wxid, Limit: 1})
+				items, err := s.service.PollOutbox(ctx, ModulePollRequest{
+					APIKey: apiKey,
+					Device: device,
+					WxID:   wxid,
+					Limit:  limit,
+				})
 				if err != nil {
 					if !conn.writeJSON(outboxWSMessage{Type: "error", Error: err.Error(), Time: time.Now().Unix()}) {
 						return
@@ -104,6 +115,21 @@ func (s *HTTPServer) outboxWebSocket(w http.ResponseWriter, r *http.Request) {
 			outgoing <- outboxWSMessage{Type: "wake"}
 		}
 	}
+}
+
+func websocketOutboxPollLimit(r *http.Request) int {
+	if r == nil {
+		return 1
+	}
+	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw == "" {
+		return 1
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 {
+		return 1
+	}
+	return limit
 }
 
 func (s *HTTPServer) readOutboxWS(ctx context.Context, cancel context.CancelFunc, conn *wsConn, apiKey string, device string, wxid string, outgoing chan<- outboxWSMessage) {
