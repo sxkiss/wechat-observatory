@@ -1,5 +1,5 @@
-# Android release workflow with optional signing secrets.
-# Produces signed release APKs when signing is configured, otherwise falls back to debug APKs.
+# Android release workflow with auto-generated signing keystore.
+# Only needs ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS in GitHub Secrets.
 name: Android Release
 
 on:
@@ -13,15 +13,15 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: write
+
 jobs:
   build-release-apk:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: android-module
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,13 +56,22 @@ jobs:
       - name: Set up Gradle caches
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Prepare signing keystore
+      - name: Generate signing keystore from secrets
         id: signing
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          if [ -n "${ANDROID_KEYSTORE_BASE64}" ]; then
-            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          if [ -n "${ANDROID_KEYSTORE_PASSWORD}" ] && [ -n "${ANDROID_KEY_ALIAS}" ]; then
+            keytool -genkeypair \
+              -alias "${ANDROID_KEY_ALIAS}" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=WeChat Observatory" \
+              -keystore "$RUNNER_TEMP/release.keystore" \
+              -storepass "${ANDROID_KEYSTORE_PASSWORD}" \
+              -keypass "${ANDROID_KEYSTORE_PASSWORD}"
             echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
@@ -86,7 +95,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: ./gradlew ${{ steps.build_target.outputs.gradle_task }}
 
       - name: Select APK artifact path
