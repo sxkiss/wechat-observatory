@@ -872,8 +872,7 @@ func (s *Service) findObservedOutgoingTextRecord(ctx context.Context, reader Adm
 			continue
 		}
 		if hasCreatedAt {
-			messageAt, ok := storedEventTime(message)
-			if !ok || messageAt.Before(windowStart) || messageAt.After(windowEnd) {
+			if !storedEventWithinWindow(message, windowStart, windowEnd) {
 				continue
 			}
 		}
@@ -901,11 +900,19 @@ func parseStoredRFC3339(value string) (time.Time, bool) {
 	return parsed, true
 }
 
-func storedEventTime(message StoredEventView) (time.Time, bool) {
-	if message.CreateTime > 0 {
-		return time.Unix(message.CreateTime, 0), true
+func storedEventWithinWindow(message StoredEventView, windowStart time.Time, windowEnd time.Time) bool {
+	if createdAt, ok := parseStoredRFC3339(message.CreatedAt); ok {
+		if !createdAt.Before(windowStart) && !createdAt.After(windowEnd) {
+			return true
+		}
 	}
-	return parseStoredRFC3339(message.CreatedAt)
+	if message.CreateTime > 0 {
+		messageAt := time.Unix(message.CreateTime, 0)
+		if !messageAt.Before(windowStart) && !messageAt.After(windowEnd) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstPositive(values ...int64) int64 {

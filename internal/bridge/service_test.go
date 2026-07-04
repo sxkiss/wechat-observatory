@@ -1980,6 +1980,63 @@ func TestAckOutboxConvertsDelayedObservedFailedTextToSent(t *testing.T) {
 	}
 }
 
+func TestAckOutboxConvertsObservedFailedTextToSentWhenCreateTimeIsTimezoneShifted(t *testing.T) {
+	outbox := &fakeOutbox{}
+	now := time.Now().UTC()
+	reader := &fakeAdminReader{
+		messages: []StoredEventView{
+			{
+				ID:          303,
+				Device:      "phone-a",
+				OwnerWxID:   "wxid_self",
+				Direction:   string(DirectionSent),
+				ChatID:      "52806025813@chatroom",
+				RoomID:      "52806025813@chatroom",
+				Text:        "时区偏移文本",
+				MessageType: 1,
+				CreateTime:  now.Add(-8 * time.Hour).Unix(),
+				CreatedAt:   now.Add(2 * time.Second).Format(time.RFC3339),
+			},
+		},
+	}
+	persistence := &fakePersistence{}
+	service := newTestService("", WithOutbox(outbox), WithAdminReader(reader), WithPersistence(persistence))
+
+	item, err := outbox.EnqueueReply(t.Context(), ReplyAction{
+		Device:    "phone-a",
+		OwnerWxID: "wxid_self",
+		WxID:      "52806025813@chatroom",
+		Kind:      OutboxKindText,
+		Text:      "时区偏移文本",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.items[0].AttemptCount = 2
+	outbox.items[0].Status = "leased"
+	outbox.items[0].CreatedAt = now.Format(time.RFC3339)
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		WxID:   "wxid_self",
+		Items: []ModuleAckItem{{
+			ID:     item.ID,
+			Status: "failed",
+			Error:  "WeChat send builder returned false",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 || acked[0].Status != "sent" {
+		t.Fatalf("expected timezone-shifted observed failed ack to be reconciled to sent, got %+v", acked)
+	}
+	if len(persistence.outboundEvents) != 1 || persistence.outboundEvents[0].Text != "时区偏移文本" {
+		t.Fatalf("unexpected outbound events: %+v", persistence.outboundEvents)
+	}
+}
+
 func TestModuleRegisterUsesWebBoundDevice(t *testing.T) {
 	service := newTestService("http://127.0.0.1:1")
 	result, err := service.RegisterModule(t.Context(), ModuleRegistrationRequest{
