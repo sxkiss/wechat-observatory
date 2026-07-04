@@ -1,5 +1,5 @@
 # Android release workflow with optional signing secrets.
-# Produces release APK artifacts for version tags and manual runs.
+# Produces signed release APKs when signing is configured, otherwise falls back to debug APKs.
 name: Android Release
 
 on:
@@ -69,24 +69,37 @@ jobs:
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build release APK
+      - name: Resolve build target
+        id: build_target
+        run: |
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            echo "gradle_task=:app:assembleRelease" >> "$GITHUB_OUTPUT"
+            echo "build_variant=release" >> "$GITHUB_OUTPUT"
+            echo "artifact_flavor=signed" >> "$GITHUB_OUTPUT"
+          else
+            echo "gradle_task=:app:assembleDebug" >> "$GITHUB_OUTPUT"
+            echo "build_variant=debug" >> "$GITHUB_OUTPUT"
+            echo "artifact_flavor=debug" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Android APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease
+        run: ./gradlew ${{ steps.build_target.outputs.gradle_task }}
 
       - name: Select APK artifact path
         id: artifact
         run: |
           signed_apk="app/build/outputs/apk/release/app-release.apk"
-          unsigned_apk="app/build/outputs/apk/release/app-release-unsigned.apk"
-          if [ -f "$signed_apk" ]; then
+          debug_apk="app/build/outputs/apk/debug/app-debug.apk"
+          if [ "${{ steps.build_target.outputs.build_variant }}" = "release" ] && [ -f "$signed_apk" ]; then
             echo "apk_path=$signed_apk" >> "$GITHUB_OUTPUT"
-          elif [ -f "$unsigned_apk" ]; then
-            echo "apk_path=$unsigned_apk" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.build_target.outputs.build_variant }}" = "debug" ] && [ -f "$debug_apk" ]; then
+            echo "apk_path=$debug_apk" >> "$GITHUB_OUTPUT"
           else
-            echo "No release APK produced" >&2
+            echo "Expected APK was not produced" >&2
             exit 1
           fi
 
@@ -94,19 +107,16 @@ jobs:
         id: rename
         run: |
           version_tag="${{ steps.release_meta.outputs.release_tag }}"
-          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
-            flavor="signed"
-          else
-            flavor="unsigned"
-          fi
+          flavor="${{ steps.build_target.outputs.artifact_flavor }}"
           target_name="wechat-observatory-android-${version_tag}-${flavor}.apk"
-          cp "${{ steps.artifact.outputs.apk_path }}" "app/build/outputs/apk/release/${target_name}"
-          echo "release_apk=app/build/outputs/apk/release/${target_name}" >> "$GITHUB_OUTPUT"
+          target_dir="app/build/outputs/apk/${{ steps.build_target.outputs.build_variant }}"
+          cp "${{ steps.artifact.outputs.apk_path }}" "${target_dir}/${target_name}"
+          echo "release_apk=${target_dir}/${target_name}" >> "$GITHUB_OUTPUT"
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wechat-observatory-android-release-apk
+          name: wechat-observatory-android-apk
           path: android-module/${{ steps.rename.outputs.release_apk }}
           if-no-files-found: error
 
@@ -123,4 +133,5 @@ jobs:
             ## Android APK
 
             - Artifact: `${{ steps.rename.outputs.release_apk }}`
+            - Build Variant: `${{ steps.build_target.outputs.build_variant }}`
             - Signed: `${{ steps.signing.outputs.signed }}`

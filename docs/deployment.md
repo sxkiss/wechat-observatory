@@ -103,8 +103,8 @@ cp deploy/k3s/secrets.example.yaml deploy/k3s/secrets.yaml
   - 构建 `android-module` 的 debug APK 并上传 artifact
 - `android-release.yml`
   - 在 `v*` 标签或手动触发并填写 `release_tag` 时构建 release APK
-  - 如果配置 Android 签名 Secrets，会输出已签名 release APK
-  - Release 资产命名为 `wechat-observatory-android-<tag>-<signed|unsigned>.apk`
+  - 如果配置 Android 签名 Secrets，会输出已签名 release APK；否则自动回退到 debug APK
+  - Release 资产命名为 `wechat-observatory-android-<tag>-<signed|debug>.apk`
   - 手动触发时会基于 `release_tag` 创建或更新 GitHub Release
 - `docker-build-on-commit.yml`
   - 参考 `allbot` 项目，使用 Buildx 构建并推送 `linux/amd64` 与 `linux/arm64` 镜像

@@ -146,9 +146,9 @@ Android release 工作流：
 
 - `.github/workflows/android-release.yml`
 - 触发条件：`v*` 标签推送，或手动触发并填写 `release_tag`
-- 默认产物：`wechat-observatory-android-release-apk`
-- Release 文件命名：`wechat-observatory-android-<tag>-<signed|unsigned>.apk`
-- 如果提供签名 Secrets，会输出已签名 release APK，并附加到 GitHub Release
+- 默认产物：`wechat-observatory-android-apk`
+- Release 文件命名：`wechat-observatory-android-<tag>-<signed|debug>.apk`
+- 如果提供签名 Secrets，会输出已签名 release APK；否则自动回退为可安装的 debug APK
 - 手动触发时会基于输入的 `release_tag` 创建或更新同名 GitHub Release
 
 Android release 签名需要以下 GitHub Secrets：
