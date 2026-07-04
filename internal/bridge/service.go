@@ -26,6 +26,7 @@ type Service struct {
 	outbox      Outbox
 	adminReader AdminReader
 	mediaDir    string
+	sleep       func(context.Context, time.Duration) error
 
 	mu               sync.RWMutex
 	nextChatRecordID int64
@@ -35,6 +36,8 @@ type Service struct {
 }
 
 const maxOutboxPollBatch = 4
+const observedOutgoingFailedAckWait = 3 * time.Second
+const observedOutgoingFailedAckPollInterval = 250 * time.Millisecond
 
 type Config struct {
 	DefaultDevice string
@@ -51,6 +54,7 @@ func NewService(cfg Config, opts ...Option) *Service {
 		outboxNotify:     map[string]map[chan struct{}]struct{}{},
 		nextChatRecordID: time.Now().Unix() * 1000,
 		mediaDir:         strings.TrimSpace(cfg.MediaDir),
+		sleep:            sleepContext,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -803,20 +807,35 @@ func (s *Service) reconcileObservedOutgoingFailedTextAcks(ctx context.Context, d
 		if err != nil {
 			return err
 		}
-		recordID, ok, err := s.findObservedOutgoingTextRecord(ctx, reader, device, ownerWxID, outboxItem)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			continue
-		}
-		items[i].Status = "sent"
-		items[i].Error = ""
-		if items[i].ChatRecordID <= 0 {
-			items[i].ChatRecordID = recordID
+		for attempt := 0; attempt < observedOutgoingFailedAckCheckCount(); attempt++ {
+			recordID, ok, err := s.findObservedOutgoingTextRecord(ctx, reader, device, ownerWxID, outboxItem)
+			if err != nil {
+				return err
+			}
+			if ok {
+				items[i].Status = "sent"
+				items[i].Error = ""
+				if items[i].ChatRecordID <= 0 {
+					items[i].ChatRecordID = recordID
+				}
+				break
+			}
+			if attempt == observedOutgoingFailedAckCheckCount()-1 {
+				break
+			}
+			if err := s.sleep(ctx, observedOutgoingFailedAckPollInterval); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func observedOutgoingFailedAckCheckCount() int {
+	if observedOutgoingFailedAckWait <= 0 || observedOutgoingFailedAckPollInterval <= 0 {
+		return 1
+	}
+	return 1 + int(observedOutgoingFailedAckWait/observedOutgoingFailedAckPollInterval)
 }
 
 func (s *Service) findObservedOutgoingTextRecord(ctx context.Context, reader AdminReader, device string, ownerWxID string, item ModuleOutboxItem) (int64, bool, error) {
@@ -896,6 +915,20 @@ func firstPositive(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func outboundText(item ModuleOutboxItem) string {

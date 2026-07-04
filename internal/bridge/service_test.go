@@ -1902,6 +1902,84 @@ func TestAckOutboxConvertsObservedFailedTextToSent(t *testing.T) {
 	}
 }
 
+func TestAckOutboxConvertsDelayedObservedFailedTextToSent(t *testing.T) {
+	outbox := &fakeOutbox{}
+	message := StoredEventView{
+		ID:          202,
+		Device:      "phone-a",
+		OwnerWxID:   "wxid_self",
+		Direction:   string(DirectionSent),
+		ChatID:      "52806025813@chatroom",
+		RoomID:      "52806025813@chatroom",
+		Text:        "延迟入库文本",
+		MessageType: 1,
+		CreateTime:  time.Now().Unix(),
+	}
+	readerCalls := 0
+	reader := &fakeAdminReader{
+		listMessages: func(_ context.Context, filter MessageFilter) ([]StoredEventView, error) {
+			readerCalls++
+			if filter.ChatID != "52806025813@chatroom" {
+				return nil, fmt.Errorf("unexpected chat id %q", filter.ChatID)
+			}
+			if readerCalls < 2 {
+				return nil, nil
+			}
+			return []StoredEventView{message}, nil
+		},
+	}
+	persistence := &fakePersistence{}
+	service := newTestService("", WithOutbox(outbox), WithAdminReader(reader), WithPersistence(persistence))
+	sleepCalls := 0
+	service.sleep = func(ctx context.Context, d time.Duration) error {
+		sleepCalls++
+		if d != observedOutgoingFailedAckPollInterval {
+			t.Fatalf("unexpected sleep interval %s", d)
+		}
+		return ctx.Err()
+	}
+
+	item, err := outbox.EnqueueReply(t.Context(), ReplyAction{
+		Device:    "phone-a",
+		OwnerWxID: "wxid_self",
+		WxID:      "52806025813@chatroom",
+		Kind:      OutboxKindText,
+		Text:      "延迟入库文本",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.items[0].AttemptCount = 2
+	outbox.items[0].Status = "leased"
+	outbox.items[0].CreatedAt = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339)
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		WxID:   "wxid_self",
+		Items: []ModuleAckItem{{
+			ID:     item.ID,
+			Status: "failed",
+			Error:  "WeChat send builder returned false",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 || acked[0].Status != "sent" {
+		t.Fatalf("expected delayed observed failed ack to be reconciled to sent, got %+v", acked)
+	}
+	if sleepCalls != 1 {
+		t.Fatalf("expected one polling sleep before message became visible, got %d", sleepCalls)
+	}
+	if readerCalls != 2 {
+		t.Fatalf("expected two reader polls before reconciliation, got %d", readerCalls)
+	}
+	if len(persistence.outboundEvents) != 1 || persistence.outboundEvents[0].Text != "延迟入库文本" {
+		t.Fatalf("unexpected outbound events: %+v", persistence.outboundEvents)
+	}
+}
+
 func TestModuleRegisterUsesWebBoundDevice(t *testing.T) {
 	service := newTestService("http://127.0.0.1:1")
 	result, err := service.RegisterModule(t.Context(), ModuleRegistrationRequest{
@@ -2030,12 +2108,13 @@ func (p *fakePersistence) RecordModuleContacts(_ context.Context, snapshot Modul
 }
 
 type fakeAdminReader struct {
-	keys     []APIKeyView
-	events   []StoredEventView
-	messages []StoredEventView
-	modules  []ModuleStatusView
-	contacts []ModuleContactView
-	calls    []string
+	keys         []APIKeyView
+	events       []StoredEventView
+	messages     []StoredEventView
+	modules      []ModuleStatusView
+	contacts     []ModuleContactView
+	calls        []string
+	listMessages func(context.Context, MessageFilter) ([]StoredEventView, error)
 }
 
 func (r *fakeAdminReader) ListAPIKeys(_ context.Context, limit int) ([]APIKeyView, error) {
@@ -2048,8 +2127,11 @@ func (r *fakeAdminReader) ListStoredEvents(_ context.Context, limit int) ([]Stor
 	return r.events, nil
 }
 
-func (r *fakeAdminReader) ListMessages(_ context.Context, filter MessageFilter) ([]StoredEventView, error) {
+func (r *fakeAdminReader) ListMessages(ctx context.Context, filter MessageFilter) ([]StoredEventView, error) {
 	r.calls = append(r.calls, "messages:"+filter.Device+":"+filter.WxID+":"+strconv.Itoa(filter.Limit))
+	if r.listMessages != nil {
+		return r.listMessages(ctx, filter)
+	}
 	out := make([]StoredEventView, 0, len(r.messages))
 	for _, message := range r.messages {
 		if filter.Device != "" && message.Device != filter.Device {
