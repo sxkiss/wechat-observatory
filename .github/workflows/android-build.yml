@@ -1,5 +1,5 @@
 # Android CI for the LSPosed companion module.
-# Builds a debug APK artifact on main pushes, pull requests, and manual runs.
+# Builds a signed release APK when secrets exist, otherwise falls back to debug, then uploads a flat artifact.
 name: Android Build
 
 on:
@@ -86,16 +86,25 @@ jobs:
           debug_apk="app/build/outputs/apk/debug/app-debug.apk"
           if [ "${{ steps.signing.outputs.signed }}" = "true" ] && [ -f "$signed_apk" ]; then
             echo "apk_path=$signed_apk" >> "$GITHUB_OUTPUT"
+            echo "artifact_name=wechat-observatory-android-release-apk" >> "$GITHUB_OUTPUT"
+            echo "target_name=wechat-observatory-android-release.apk" >> "$GITHUB_OUTPUT"
           elif [ -f "$debug_apk" ]; then
             echo "apk_path=$debug_apk" >> "$GITHUB_OUTPUT"
+            echo "artifact_name=wechat-observatory-android-debug-apk" >> "$GITHUB_OUTPUT"
+            echo "target_name=wechat-observatory-android-debug.apk" >> "$GITHUB_OUTPUT"
           else
             echo "Expected APK was not produced" >&2
             exit 1
           fi
 
+      - name: Stage APK artifact
+        run: |
+          mkdir -p dist
+          cp "${{ steps.artifact.outputs.apk_path }}" "dist/${{ steps.artifact.outputs.target_name }}"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wechat-observatory-android-debug-apk
-          path: android-module/${{ steps.artifact.outputs.apk_path }}
+          name: ${{ steps.artifact.outputs.artifact_name }}
+          path: android-module/dist/${{ steps.artifact.outputs.target_name }}
           if-no-files-found: error
