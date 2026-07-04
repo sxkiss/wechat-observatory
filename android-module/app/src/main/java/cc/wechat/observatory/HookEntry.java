@@ -27,10 +27,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.HttpURLConnection;
@@ -1385,6 +1384,33 @@ public final class HookEntry implements IXposedHookLoadPackage {
             depth++;
         }
         return current == null ? t : current;
+    }
+
+    private static String detailedErrorChain(Throwable t) {
+        if (t == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(192);
+        Throwable current = t;
+        int depth = 0;
+        while (current != null && depth < 8) {
+            if (depth > 0) {
+                out.append(" <- ");
+            }
+            out.append(current.getClass().getSimpleName());
+            String message = shortError(current);
+            if (!isBlank(message) && !message.equals(current.getClass().getName())) {
+                out.append(": ").append(message);
+            }
+            Throwable next = current.getCause();
+            if (next == current) {
+                break;
+            }
+            current = next;
+            depth++;
+        }
+        String text = out.toString();
+        return text.length() > 480 ? text.substring(0, 480) + "..." : text;
     }
 
     private static boolean shouldReportMessage(String talker, String content, int type) {
@@ -4327,7 +4353,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             log("sendRevoke invoked talker=" + source.talker + " msgId=" + source.msgId + " msgSvrId=" + source.msgSvrId);
             return SendResult.sent(source.msgId > 0L ? source.msgId : chatRecordId);
         } catch (Throwable t) {
-            return SendResult.failed("WeChat revoke failed via RevokeMsgEvent: " + shortError(t));
+            return SendResult.failed("WeChat revoke failed via RevokeMsgEvent: " + detailedErrorChain(t));
         }
     }
 
@@ -4662,8 +4688,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             return success;
         } catch (InvocationTargetException ite) {
             Throwable cause = ite.getCause() != null ? ite.getCause() : ite;
-            log("publishRevokeMsgEvent InvocationTargetException cause: " + cause.getClass().getName() + " " + cause.getMessage());
-            throw new Exception("RevokeMsgEvent.e() failed: " + cause.getClass().getName() + " " + cause.getMessage(), cause);
+            log("publishRevokeMsgEvent InvocationTargetException cause: " + detailedErrorChain(cause));
+            throw new Exception("RevokeMsgEvent.e() failed: " + detailedErrorChain(cause), cause);
         }
     }
 

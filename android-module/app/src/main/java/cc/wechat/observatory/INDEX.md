@@ -8,7 +8,7 @@
 
 | File | Role | Function |
 |------|------|----------|
-| HookEntry.java | Runtime | Hook 微信数据库、上传消息并调度 outbox 并发发送与实验性撤回 |
+| HookEntry.java | Runtime | Hook 微信数据库、上传消息并调度 outbox 并发发送与实验性撤回，同时把撤回异常链直接回传到桥接层 |
 | SettingsActivity.java | UI | 暴露模块轮询与出站并发配置 |
 | BridgeConfigProvider.java | Config | 向微信进程导出可读取的模块设置 |
 | BridgeConfigReceiver.java | Config | 接收外部配置广播并刷新镜像配置 |
