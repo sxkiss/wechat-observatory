@@ -9,6 +9,6 @@
 | File | Role | Function |
 |------|------|----------|
 | android-build.yml | CI | 使用 Gradle Wrapper 构建 Android debug APK 并上传产物 |
-| android-release.yml | Release | 构建 Android release APK，并在标签发布时附加到 GitHub Release |
+| android-release.yml | Release | 构建 Android release APK，并在标签发布或手动指定 `release_tag` 时附加到 GitHub Release |
 | docker-build-on-commit.yml | CI | 参考 allbot，在 main 分支变更后构建并推送多架构容器镜像 |
 | docker-release-on-tag.yml | Release | 在版本标签上构建并推送 semver / latest 多架构镜像 |
