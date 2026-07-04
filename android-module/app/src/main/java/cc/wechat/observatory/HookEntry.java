@@ -5098,6 +5098,34 @@ public final class HookEntry implements IXposedHookLoadPackage {
         return waitForOutgoingMediaMessage(config, wxid, afterMsgId, timeoutMs, "image", "3");
     }
 
+    private static long waitForOutgoingTextMessage(BridgeConfig config, String wxid, long afterMsgId, String text, long timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(1000L, timeoutMs);
+        Throwable lastError = null;
+        while (System.currentTimeMillis() <= deadline) {
+            try {
+                Object db = ensureMessageDatabase(config);
+                if (db != null) {
+                    long msgId = findOutgoingTextMessageId(db, wxid, afterMsgId, text);
+                    if (msgId > 0L) {
+                        return msgId;
+                    }
+                }
+            } catch (Throwable t) {
+                lastError = t;
+            }
+            try {
+                Thread.sleep(250L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (lastError != null) {
+            log("text send DB verification failed: " + shortError(lastError));
+        }
+        return 0L;
+    }
+
     private static long waitForOutgoingMediaMessage(BridgeConfig config, String wxid, long afterMsgId, long timeoutMs, String kind, String typeFilter) {
         long deadline = System.currentTimeMillis() + Math.max(1000L, timeoutMs);
         Throwable lastError = null;
@@ -5236,6 +5264,27 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 + "WHERE msgId > ? AND talker = ? AND isSend = 1 AND type IN (" + typeFilter + ") "
                 + "ORDER BY msgId DESC "
                 + "LIMIT 1", new String[]{String.valueOf(afterMsgId), wxid});
+        if (cursor == null) {
+            return 0L;
+        }
+        try {
+            Method moveToFirst = findNoArgMethod(cursor.getClass(), "moveToFirst");
+            if (Boolean.TRUE.equals(moveToFirst.invoke(cursor))) {
+                return longColumn(cursor, 0);
+            }
+            return 0L;
+        } finally {
+            closeQuietly(cursor);
+        }
+    }
+
+    private static long findOutgoingTextMessageId(Object db, String wxid, long afterMsgId, String text) throws Exception {
+        Object cursor = rawQuery(db, ""
+                + "SELECT msgId "
+                + "FROM message "
+                + "WHERE msgId > ? AND talker = ? AND isSend = 1 AND type = 1 AND content = ? "
+                + "ORDER BY msgId DESC "
+                + "LIMIT 1", new String[]{String.valueOf(afterMsgId), wxid, text});
         if (cursor == null) {
             return 0L;
         }
@@ -5723,6 +5772,17 @@ public final class HookEntry implements IXposedHookLoadPackage {
             return SendResult.failed("wxid and text are required");
         }
 
+        BridgeConfig config = BridgeConfig.load(bridgeContext());
+        Object db = ensureMessageDatabase(config);
+        long beforeMsgId = 0L;
+        if (db != null) {
+            try {
+                beforeMsgId = readMaxMessageId(db);
+            } catch (Throwable t) {
+                log("text send verification snapshot failed before send: " + shortError(t));
+            }
+        }
+
         int msgType = resolveMessageType(classLoader, wxid);
         Throwable builderUnavailable = null;
         Throwable directUnavailable = null;
@@ -5730,9 +5790,18 @@ public final class HookEntry implements IXposedHookLoadPackage {
         try {
             boolean sent = sendViaSendBuilder(classLoader, wxid, text, msgType);
             if (!sent) {
+                long msgId = waitForOutgoingTextMessage(config, wxid, beforeMsgId, text, 3000L);
+                if (msgId > 0L) {
+                    log("sendText builder returned false but outgoing text was verified msgId=" + msgId);
+                    return SendResult.sent(msgId);
+                }
                 return SendResult.failed("WeChat send builder returned false");
             }
             log("sendText sent via w11.r1 builder wxid=" + wxid + " msgType=" + msgType);
+            long msgId = waitForOutgoingTextMessage(config, wxid, beforeMsgId, text, 8000L);
+            if (msgId > 0L) {
+                return SendResult.sent(msgId);
+            }
             return SendResult.sent(0L);
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             builderUnavailable = e;
