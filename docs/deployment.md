@@ -31,10 +31,11 @@ MYSQL_PASSWORD=your-strong-mysql-password
 MYSQL_ROOT_PASSWORD=your-strong-root-password
 ```
 
-构建镜像并启动服务：
+拉取镜像并启动服务：
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml up -d --build
+docker compose -f deploy/docker/docker-compose.yml pull
+docker compose -f deploy/docker/docker-compose.yml up -d
 ```
 
 Compose 会启动 MySQL，等待数据库健康，执行一次 `gateway-db` 初始化任务，然后启动网关。
@@ -54,7 +55,8 @@ http://<server-host>:8088/admin/
 ## 更新版本
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml up -d --build
+docker compose -f deploy/docker/docker-compose.yml pull
+docker compose -f deploy/docker/docker-compose.yml up -d
 ```
 
 ## k3s 参考

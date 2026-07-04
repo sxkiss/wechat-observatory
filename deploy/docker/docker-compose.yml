@@ -21,10 +21,7 @@ services:
       start_period: 30s
 
   gateway:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    image: wechat-observatory:local
+    image: sxkiss/wechat-observatory:latest
     restart: unless-stopped
     env_file:
       - path: .env
@@ -55,7 +52,7 @@ services:
       start_period: 10s
 
   gateway-db:
-    image: wechat-observatory:local
+    image: sxkiss/wechat-observatory:latest
     restart: "no"
     env_file:
       - path: .env
