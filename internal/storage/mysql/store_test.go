@@ -184,6 +184,30 @@ func TestMessageEventDedupUpdatePromotesObservedEventOverAckPlaceholder(t *testi
 	}
 }
 
+func TestObservedOutgoingTextExistsQueryMatchesStableSentTextIdentity(t *testing.T) {
+	query := strings.Join(strings.Fields(observedOutgoingTextExistsStatement), " ")
+	for _, want := range []string{
+		"FROM bridge_message_events",
+		"device = ?",
+		"owner_wxid <=> ?",
+		"direction = 'sent'",
+		"text = ?",
+		"message_type = 1",
+		"room_id = ?",
+		"to_wxid = ?",
+		"from_wxid = ?",
+		"sender_wxid = ?",
+		"create_time BETWEEN ? AND ?",
+		"raw_provider IS NULL OR raw_provider <> ?",
+		"ORDER BY id DESC",
+		"LIMIT 1",
+	} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("observed outgoing text query missing %q: %s", want, query)
+		}
+	}
+}
+
 func TestListMessagesQuerySupportsChatRooms(t *testing.T) {
 	query, args := listMessagesQuery(bridge.MessageFilter{
 		Device:   "phone-a",

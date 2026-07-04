@@ -20,6 +20,26 @@ import (
 )
 
 const driverName = "mysql"
+const observedOutgoingTextRetryWindow = 2 * time.Minute
+
+const observedOutgoingTextExistsStatement = `
+	SELECT id
+	FROM bridge_message_events
+	WHERE device = ?
+		AND owner_wxid <=> ?
+		AND direction = 'sent'
+		AND text = ?
+		AND message_type = 1
+		AND (
+			room_id = ?
+			OR to_wxid = ?
+			OR from_wxid = ?
+			OR sender_wxid = ?
+		)
+		AND create_time BETWEEN ? AND ?
+		AND (raw_provider IS NULL OR raw_provider <> ?)
+	ORDER BY id DESC
+	LIMIT 1`
 
 type Store struct {
 	db *sql.DB
@@ -719,7 +739,7 @@ func (s *Store) PollReplyActions(ctx context.Context, req bridge.ModulePollReque
 	}()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, wxid, kind
+		SELECT id, wxid, kind, text, attempt_count, created_at
 		FROM bridge_module_outbox
 		WHERE device = ?
 			AND owner_wxid = ?
@@ -735,13 +755,28 @@ func (s *Store) PollReplyActions(ctx context.Context, req bridge.ModulePollReque
 		return nil, err
 	}
 	candidates := make([]bridge.OutboxLeaseCandidate, 0, limit)
+	autoSentIDs := make([]int64, 0, limit)
 	position := 0
 	for rows.Next() {
 		var candidate bridge.OutboxLeaseCandidate
+		var text string
+		var attemptCount int
+		var createdAt time.Time
 		candidate.Position = position
-		if err := rows.Scan(&candidate.ID, &candidate.WxID, &candidate.Kind); err != nil {
+		if err := rows.Scan(&candidate.ID, &candidate.WxID, &candidate.Kind, &text, &attemptCount, &createdAt); err != nil {
 			_ = rows.Close()
 			return nil, err
+		}
+		if attemptCount > 0 && candidate.Kind == bridge.OutboxKindText {
+			ok, err := s.hasObservedOutgoingText(ctx, tx, strings.TrimSpace(req.Device), strings.TrimSpace(req.WxID), strings.TrimSpace(candidate.WxID), text, createdAt)
+			if err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			if ok {
+				autoSentIDs = append(autoSentIDs, candidate.ID)
+				continue
+			}
 		}
 		candidates = append(candidates, candidate)
 		position++
@@ -751,6 +786,16 @@ func (s *Store) PollReplyActions(ctx context.Context, req bridge.ModulePollReque
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	for _, id := range autoSentIDs {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE bridge_module_outbox
+			SET status = 'sent', last_error = NULL, lease_until = NULL
+			WHERE id = ?`,
+			id,
+		); err != nil {
+			return nil, err
+		}
 	}
 	selected := bridge.SelectOutboxLeaseCandidates(candidates, limit)
 	ids := make([]int64, 0, len(selected))
@@ -775,6 +820,35 @@ func (s *Store) PollReplyActions(ctx context.Context, req bridge.ModulePollReque
 		return []bridge.ModuleOutboxItem{}, nil
 	}
 	return s.listOutboxItems(ctx, ids)
+}
+
+func (s *Store) hasObservedOutgoingText(ctx context.Context, exec sqlExecutor, device string, ownerWxID string, targetWxID string, text string, createdAt time.Time) (bool, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, nil
+	}
+	windowStart := createdAt.Add(-5 * time.Second).Unix()
+	windowEnd := createdAt.Add(observedOutgoingTextRetryWindow).Unix()
+	var id int64
+	err := exec.QueryRowContext(ctx, observedOutgoingTextExistsStatement,
+		device,
+		nullString(ownerWxID),
+		text,
+		targetWxID,
+		targetWxID,
+		targetWxID,
+		targetWxID,
+		windowStart,
+		windowEnd,
+		bridge.RawProviderModuleAck,
+	).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return id > 0, nil
 }
 
 func (s *Store) AckReplyActions(ctx context.Context, req bridge.ModuleAckRequest) ([]bridge.ModuleOutboxItem, error) {

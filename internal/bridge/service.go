@@ -647,6 +647,10 @@ func (s *Service) PollOutbox(ctx context.Context, req ModulePollRequest) ([]Modu
 	if err != nil {
 		return nil, err
 	}
+	items, err = s.filterObservedOutgoingTextRetries(ctx, req.Device, req.WxID, items)
+	if err != nil {
+		return nil, err
+	}
 	s.recordModuleActivity(ctx, ModuleActivity{
 		Device:        req.Device,
 		WxID:          req.WxID,
@@ -674,6 +678,9 @@ func (s *Service) AckOutbox(ctx context.Context, req ModuleAckRequest) ([]Module
 	}
 	if currentWxID != "" && req.WxID != "" && currentWxID != req.WxID {
 		return nil, fmt.Errorf("module wxid %q is not current device wxid", req.WxID)
+	}
+	if err := s.reconcileObservedOutgoingFailedTextAcks(ctx, req.Device, req.WxID, req.Items); err != nil {
+		return nil, err
 	}
 	items, err := s.outbox.AckReplyActions(ctx, req)
 	if err != nil {
@@ -740,6 +747,155 @@ func (s *Service) AckOutbox(ctx context.Context, req ModuleAckRequest) ([]Module
 		}
 	}
 	return items, nil
+}
+
+const observedOutgoingTextRetryWindow = 2 * time.Minute
+
+func (s *Service) filterObservedOutgoingTextRetries(ctx context.Context, device string, ownerWxID string, items []ModuleOutboxItem) ([]ModuleOutboxItem, error) {
+	reader := s.AdminReader()
+	if reader == nil || len(items) == 0 {
+		return items, nil
+	}
+	keep := make([]ModuleOutboxItem, 0, len(items))
+	acks := make([]ModuleAckItem, 0, len(items))
+	for _, item := range items {
+		if item.AttemptCount <= 1 || item.Kind != OutboxKindText {
+			keep = append(keep, item)
+			continue
+		}
+		recordID, ok, err := s.findObservedOutgoingTextRecord(ctx, reader, device, ownerWxID, item)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			keep = append(keep, item)
+			continue
+		}
+		acks = append(acks, ModuleAckItem{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: recordID,
+		})
+	}
+	if len(acks) == 0 {
+		return keep, nil
+	}
+	if _, err := s.outbox.AckReplyActions(ctx, ModuleAckRequest{
+		Device: device,
+		WxID:   ownerWxID,
+		Items:  acks,
+	}); err != nil {
+		return nil, err
+	}
+	return keep, nil
+}
+
+func (s *Service) reconcileObservedOutgoingFailedTextAcks(ctx context.Context, device string, ownerWxID string, items []ModuleAckItem) error {
+	reader := s.AdminReader()
+	if reader == nil {
+		return nil
+	}
+	for i := range items {
+		if items[i].Status != "failed" {
+			continue
+		}
+		outboxItem, err := s.outbox.GetReplyAction(ctx, items[i].ID)
+		if err != nil {
+			return err
+		}
+		recordID, ok, err := s.findObservedOutgoingTextRecord(ctx, reader, device, ownerWxID, outboxItem)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		items[i].Status = "sent"
+		items[i].Error = ""
+		if items[i].ChatRecordID <= 0 {
+			items[i].ChatRecordID = recordID
+		}
+	}
+	return nil
+}
+
+func (s *Service) findObservedOutgoingTextRecord(ctx context.Context, reader AdminReader, device string, ownerWxID string, item ModuleOutboxItem) (int64, bool, error) {
+	if reader == nil || item.Kind != OutboxKindText {
+		return 0, false, nil
+	}
+	text := strings.TrimSpace(item.Text)
+	if text == "" {
+		return 0, false, nil
+	}
+	filter := MessageFilter{
+		Device:    device,
+		OwnerWxID: firstNonEmpty(item.OwnerWxID, ownerWxID),
+		ChatID:    item.WxID,
+		ChatKind:  chatKindForTarget(item.WxID),
+		Limit:     20,
+	}
+	stored, err := reader.ListMessages(ctx, filter)
+	if err != nil {
+		return 0, false, err
+	}
+	createdAt, hasCreatedAt := parseStoredRFC3339(item.CreatedAt)
+	windowStart := time.Time{}
+	windowEnd := time.Time{}
+	if hasCreatedAt {
+		windowStart = createdAt.Add(-5 * time.Second)
+		windowEnd = createdAt.Add(observedOutgoingTextRetryWindow)
+	}
+	for _, message := range stored {
+		if message.Direction != string(DirectionSent) || message.MessageType != 1 {
+			continue
+		}
+		if strings.TrimSpace(message.Text) != text {
+			continue
+		}
+		if hasCreatedAt {
+			messageAt, ok := storedEventTime(message)
+			if !ok || messageAt.Before(windowStart) || messageAt.After(windowEnd) {
+				continue
+			}
+		}
+		return firstPositive(message.ChatRecordID, message.EventID, message.ID), true, nil
+	}
+	return 0, false, nil
+}
+
+func chatKindForTarget(wxid string) string {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(wxid)), "@chatroom") {
+		return string(ChatKindRoom)
+	}
+	return string(ChatKindDirect)
+}
+
+func parseStoredRFC3339(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func storedEventTime(message StoredEventView) (time.Time, bool) {
+	if message.CreateTime > 0 {
+		return time.Unix(message.CreateTime, 0), true
+	}
+	return parseStoredRFC3339(message.CreatedAt)
+}
+
+func firstPositive(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func outboundText(item ModuleOutboxItem) string {

@@ -1791,6 +1791,117 @@ func TestModuleOutboxPollSpreadsLeaseAcrossLanes(t *testing.T) {
 	}
 }
 
+func TestModuleOutboxPollSkipsObservedOutgoingTextRetry(t *testing.T) {
+	outbox := &fakeOutbox{}
+	reader := &fakeAdminReader{
+		messages: []StoredEventView{
+			{
+				ID:          88,
+				Device:      "phone-a",
+				OwnerWxID:   "wxid_self",
+				Direction:   string(DirectionSent),
+				ChatID:      "52806025813@chatroom",
+				RoomID:      "52806025813@chatroom",
+				Text:        "重复文本",
+				MessageType: 1,
+				CreateTime:  time.Now().Unix(),
+			},
+		},
+	}
+	service := newTestService("", WithOutbox(outbox), WithAdminReader(reader))
+
+	item, err := outbox.EnqueueReply(t.Context(), ReplyAction{
+		Device:    "phone-a",
+		OwnerWxID: "wxid_self",
+		WxID:      "52806025813@chatroom",
+		Kind:      OutboxKindText,
+		Text:      "重复文本",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.items[0].AttemptCount = 1
+	outbox.items[0].CreatedAt = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339)
+
+	items, err := service.PollOutbox(t.Context(), ModulePollRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		WxID:   "wxid_self",
+		Limit:  1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected observed duplicate retry to be filtered, got %+v", items)
+	}
+	stored, err := service.OutboxItem(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "sent" {
+		t.Fatalf("expected filtered retry to be auto-marked sent, got %+v", stored)
+	}
+}
+
+func TestAckOutboxConvertsObservedFailedTextToSent(t *testing.T) {
+	outbox := &fakeOutbox{}
+	reader := &fakeAdminReader{
+		messages: []StoredEventView{
+			{
+				ID:          101,
+				Device:      "phone-a",
+				OwnerWxID:   "wxid_self",
+				Direction:   string(DirectionSent),
+				ChatID:      "52806025813@chatroom",
+				RoomID:      "52806025813@chatroom",
+				Text:        "误判失败文本",
+				MessageType: 1,
+				CreateTime:  time.Now().Unix(),
+			},
+		},
+	}
+	persistence := &fakePersistence{}
+	service := newTestService("", WithOutbox(outbox), WithAdminReader(reader), WithPersistence(persistence))
+
+	item, err := outbox.EnqueueReply(t.Context(), ReplyAction{
+		Device:    "phone-a",
+		OwnerWxID: "wxid_self",
+		WxID:      "52806025813@chatroom",
+		Kind:      OutboxKindText,
+		Text:      "误判失败文本",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.items[0].AttemptCount = 2
+	outbox.items[0].Status = "leased"
+	outbox.items[0].CreatedAt = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339)
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		WxID:   "wxid_self",
+		Items: []ModuleAckItem{{
+			ID:     item.ID,
+			Status: "failed",
+			Error:  "WeChat send builder returned false",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 || acked[0].Status != "sent" {
+		t.Fatalf("expected failed ack to be reconciled to sent, got %+v", acked)
+	}
+	if len(persistence.outboundEvents) != 1 {
+		t.Fatalf("expected one outbound event after reconciliation, got %+v", persistence.outboundEvents)
+	}
+	if persistence.outboundEvents[0].Text != "误判失败文本" {
+		t.Fatalf("unexpected outbound event: %+v", persistence.outboundEvents[0])
+	}
+}
+
 func TestModuleRegisterUsesWebBoundDevice(t *testing.T) {
 	service := newTestService("http://127.0.0.1:1")
 	result, err := service.RegisterModule(t.Context(), ModuleRegistrationRequest{
