@@ -28,6 +28,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -4637,15 +4639,32 @@ public final class HookEntry implements IXposedHookLoadPackage {
     }
 
     private static boolean publishRevokeMsgEvent(ClassLoader classLoader, RevokeSource source, boolean isImage) throws Exception {
-        Class<?> eventClass = findClass(classLoader, "com.tencent.mm.autogen.events.RevokeMsgEvent");
-        Object event = eventClass.getDeclaredConstructor().newInstance();
-        Object payload = resolveEventPayloadObject(event);
-        if (payload == null) {
-            throw new IllegalStateException("RevokeMsgEvent payload is unavailable");
+        try {
+            Class<?> eventClass = findClass(classLoader, "com.tencent.mm.autogen.events.RevokeMsgEvent");
+            if (eventClass == null) {
+                throw new ClassNotFoundException("RevokeMsgEvent class not found in current WeChat version");
+            }
+            Object event = eventClass.getDeclaredConstructor().newInstance();
+            Object payload = resolveEventPayloadObject(event);
+            if (payload == null) {
+                throw new IllegalStateException("RevokeMsgEvent payload is unavailable");
+            }
+            log("publishRevokeMsgEvent payloadClass=" + payload.getClass().getName() + " isImage=" + isImage);
+            applyRevokePayload(payload, source, isImage);
+            Method eMethod = findNoArgMethod(event.getClass(), "e");
+            if (eMethod == null) {
+                throw new NoSuchMethodException("RevokeMsgEvent.e() not found");
+            }
+            log("publishRevokeMsgEvent invoking e() on " + event.getClass().getName());
+            Object result = eMethod.invoke(event);
+            boolean success = !(result instanceof Boolean) || ((Boolean) result).booleanValue();
+            log("publishRevokeMsgEvent result=" + result + " success=" + success);
+            return success;
+        } catch (InvocationTargetException ite) {
+            Throwable cause = ite.getCause() != null ? ite.getCause() : ite;
+            log("publishRevokeMsgEvent InvocationTargetException cause: " + cause.getClass().getName() + " " + cause.getMessage());
+            throw new Exception("RevokeMsgEvent.e() failed: " + cause.getClass().getName() + " " + cause.getMessage(), cause);
         }
-        applyRevokePayload(payload, source, isImage);
-        Object result = findNoArgMethod(event.getClass(), "e").invoke(event);
-        return !(result instanceof Boolean) || ((Boolean) result).booleanValue();
     }
 
     private static long sendViaQuoteAppMsg(ClassLoader classLoader, String wxid, String text, QuoteSource source) throws Exception {
