@@ -1,5 +1,6 @@
 # Android CI for the LSPosed companion module.
 # Builds a signed release APK when secrets exist, otherwise falls back to debug, then uploads a flat artifact.
+# Main/manual runs also publish the staged APK to a rolling GitHub prerelease.
 name: Android Build
 
 on:
@@ -16,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -108,3 +109,22 @@ jobs:
           name: ${{ steps.artifact.outputs.artifact_name }}
           path: android-module/dist/${{ steps.artifact.outputs.target_name }}
           if-no-files-found: error
+
+      - name: Publish rolling build release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-build-latest
+          name: Android Build Latest
+          target_commitish: ${{ github.sha }}
+          files: android-module/dist/${{ steps.artifact.outputs.target_name }}
+          prerelease: true
+          generate_release_notes: false
+          append_body: false
+          body: |
+            Auto-updated by `android-build.yml`.
+
+            - Commit: `${{ github.sha }}`
+            - Branch: `${{ github.ref_name }}`
+            - APK: `${{ steps.artifact.outputs.target_name }}`
+            - Signed: `${{ steps.signing.outputs.signed }}`
