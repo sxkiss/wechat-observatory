@@ -866,6 +866,84 @@ func TestAdminSendQuoteActionRequiresQuoteMsgID(t *testing.T) {
 	}
 }
 
+func TestAdminSendRevokeActionQueuesActionWithoutPublishingOutboundMessage(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"revoke",
+		"chat_record_id":12345
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d body=%s", rec.Code, rec.Body.String())
+	}
+	items := pollOutbox(t, service, "phone-a", 10)
+	if len(items) != 1 {
+		t.Fatalf("expected one outbox item, got %+v", items)
+	}
+	item := items[0]
+	if item.Kind != OutboxKindRevoke || item.Text != "[撤回]" || item.WxID != "wxid_friend" {
+		t.Fatalf("unexpected revoke action: %+v", item)
+	}
+	var payload struct {
+		Kind         string `json:"kind"`
+		ChatRecordID int64  `json:"chat_record_id"`
+	}
+	if err := json.Unmarshal(item.PayloadJSON, &payload); err != nil {
+		t.Fatalf("payload_json should be valid json: %v", err)
+	}
+	if payload.Kind != OutboxKindRevoke || payload.ChatRecordID != 12345 {
+		t.Fatalf("unexpected revoke payload: %+v", payload)
+	}
+
+	acked, err := service.AckOutbox(t.Context(), ModuleAckRequest{
+		APIKey: testAPIKey,
+		Device: "phone-a",
+		Items: []ModuleAckItem{{
+			ID:           item.ID,
+			Status:       "sent",
+			ChatRecordID: 12345,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acked) != 1 {
+		t.Fatalf("expected one acked item, got %+v", acked)
+	}
+	if events := service.Hub().Recent(1); len(events) != 0 {
+		t.Fatalf("revoke ack should not publish synthetic outbound message, got %+v", events)
+	}
+}
+
+func TestAdminSendRevokeActionRequiresChatRecordID(t *testing.T) {
+	service := newTestService("")
+	server := NewHTTPServer(service, "admin").Handler()
+
+	body := []byte(`{
+		"device":"phone-a",
+		"owner_wxid":"wxid_self",
+		"wx_ids":["wxid_friend"],
+		"kind":"revoke"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/send/action", bytes.NewReader(body))
+	req.Header.Set("X-Bridge-Password", "admin")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing revoke chat_record_id should be rejected, got status %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAdminSendLinkActionQueuesAppMsg(t *testing.T) {
 	service := newTestService("")
 	server := NewHTTPServer(service, "admin").Handler()

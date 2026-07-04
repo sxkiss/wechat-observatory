@@ -536,6 +536,9 @@ func actionPayloadJSON(req SendActionRequest) (json.RawMessage, error) {
 	if req.EmojiProductID != "" {
 		payload["emoji_product_id"] = req.EmojiProductID
 	}
+	if req.ChatRecordID > 0 {
+		payload["chat_record_id"] = req.ChatRecordID
+	}
 	if req.RecordTitle != "" {
 		payload["record_title"] = req.RecordTitle
 	}
@@ -698,6 +701,9 @@ func (s *Service) AckOutbox(ctx context.Context, req ModuleAckRequest) ([]Module
 	for _, item := range items {
 		ack := acks[item.ID]
 		if ack.Status != "sent" {
+			continue
+		}
+		if isRevokeOutboxItem(item) {
 			continue
 		}
 		recordID := ack.ChatRecordID
@@ -961,6 +967,9 @@ func outboundText(item ModuleOutboxItem) string {
 		payload := locationPayloadFromRaw(item.PayloadJSON)
 		return firstNonEmpty(payload.LocationLabel, payload.LocationPoiName, "[位置]")
 	}
+	if isRevokeOutboxItem(item) {
+		return "[撤回]"
+	}
 	return item.Text
 }
 
@@ -1107,6 +1116,10 @@ func isQuoteOutboxItem(item ModuleOutboxItem) bool {
 
 func isLinkOutboxItem(item ModuleOutboxItem) bool {
 	return item.Kind == OutboxKindLink
+}
+
+func isRevokeOutboxItem(item ModuleOutboxItem) bool {
+	return item.Kind == OutboxKindRevoke
 }
 
 func isMiniProgramOutboxItem(item ModuleOutboxItem) bool {

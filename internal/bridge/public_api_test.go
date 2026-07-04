@@ -1,3 +1,7 @@
+// @input: testing, httptest, encoding/json; bridge public HTTP handlers, OpenAPI docs, and outbox helpers
+// @output: Regression tests for public v1 capabilities, typed endpoints, docs, and auth boundaries
+// @position: Verification suite for the external adapter-facing API contract
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -94,6 +98,7 @@ func TestPublicV1CapabilitiesDescribeProtocolWithoutSecrets(t *testing.T) {
 	var voice *PublicMessageCapability
 	var emoji *PublicMessageCapability
 	var chatHistory *PublicMessageCapability
+	var revoke *PublicMessageCapability
 	for i := range got.Capabilities {
 		capability := &got.Capabilities[i]
 		if capability.Kind == MessageKindPayment {
@@ -111,6 +116,9 @@ func TestPublicV1CapabilitiesDescribeProtocolWithoutSecrets(t *testing.T) {
 		if capability.Kind == MessageKindChatHistory {
 			chatHistory = capability
 		}
+		if capability.SendKind == OutboxKindRevoke {
+			revoke = capability
+		}
 	}
 	if text == nil || text.SendEndpoint != "/api/v1/messages/text" || text.OutboundStatus != "stable" {
 		t.Fatalf("text capability missing or unstable: %+v", text)
@@ -123,6 +131,9 @@ func TestPublicV1CapabilitiesDescribeProtocolWithoutSecrets(t *testing.T) {
 	}
 	if chatHistory == nil || chatHistory.OutboundStatus != "source_forward_only" || !containsString(chatHistory.Unsupported, "arbitrary_raw_xml_send") {
 		t.Fatalf("chat history capability should remain forwarding-only: %+v", chatHistory)
+	}
+	if revoke == nil || revoke.SendEndpoint != "/api/v1/messages/revoke" || revoke.OutboundStatus != "experimental" {
+		t.Fatalf("revoke capability should be exposed as experimental support: %+v", revoke)
 	}
 	if payment == nil || payment.InboundStatus != "parse_only" || payment.OutboundStatus != "unsupported" {
 		t.Fatalf("payment capability should be parse-only inbound: %+v", payment)
@@ -387,6 +398,20 @@ func TestPublicV1TypedMessageEndpointsCoverAllActionKinds(t *testing.T) {
 				t.Helper()
 				if payload["appmsg_title"] != "Example" || payload["appmsg_url"] != "https://example.test/page" {
 					t.Fatalf("link endpoint should preserve appmsg title/url, payload=%+v", payload)
+				}
+			},
+		},
+		{
+			name:     "revoke",
+			path:     "/api/v1/messages/revoke",
+			wantKind: OutboxKindRevoke,
+			fields: map[string]any{
+				"chat_record_id": 12345,
+			},
+			checkItem: func(t *testing.T, item ModuleOutboxItem, payload map[string]any) {
+				t.Helper()
+				if item.Text != "[撤回]" || payload["chat_record_id"] != float64(12345) {
+					t.Fatalf("revoke endpoint should preserve revoke target, item=%+v payload=%+v", item, payload)
 				}
 			},
 		},
@@ -1237,7 +1262,7 @@ func TestOpenAPIDocsArePublicAndDescribeActionProtocol(t *testing.T) {
 	if !ok {
 		t.Fatalf("openapi paths missing: %+v", spec)
 	}
-	for _, path := range []string{"/api/v1/capabilities", "/api/v1/messages/text", "/api/v1/messages/image", "/api/v1/messages/link", "/api/v1/messages/chat-history", "/api/v1/outbox/{id}", "/api/v1/ws", "/api/send/action", "/module/outbox/poll", "/module/outbox/ack", "/webhook/module/message"} {
+	for _, path := range []string{"/api/v1/capabilities", "/api/v1/messages/text", "/api/v1/messages/image", "/api/v1/messages/link", "/api/v1/messages/revoke", "/api/v1/messages/chat-history", "/api/v1/outbox/{id}", "/api/v1/ws", "/api/send/action", "/module/outbox/poll", "/module/outbox/ack", "/webhook/module/message"} {
 		if _, ok := paths[path]; !ok {
 			t.Fatalf("openapi path %s missing", path)
 		}
@@ -1250,7 +1275,7 @@ func TestOpenAPIDocsArePublicAndDescribeActionProtocol(t *testing.T) {
 	if !ok {
 		t.Fatalf("openapi schemas missing: %+v", components)
 	}
-	for _, schema := range []string{"CapabilitiesResponse", "PublicSendResponse", "PublicOutboxEnvelope", "PublicMessageEnvelope", "PublicMessageMedia", "TextMessageRequest", "MediaMessageRequest", "LinkMessageRequest", "ChatHistoryMessageRequest"} {
+	for _, schema := range []string{"CapabilitiesResponse", "PublicSendResponse", "PublicOutboxEnvelope", "PublicMessageEnvelope", "PublicMessageMedia", "TextMessageRequest", "MediaMessageRequest", "LinkMessageRequest", "RevokeMessageRequest", "ChatHistoryMessageRequest"} {
 		if _, ok := schemas[schema]; !ok {
 			t.Fatalf("openapi schema %s missing", schema)
 		}

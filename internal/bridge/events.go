@@ -1,3 +1,7 @@
+// @input: encoding/json, errors, strings, time; bridge message and outbox request payloads
+// @output: Shared bridge event models, send action validation, and module outbox DTOs
+// @position: Core protocol contract between HTTP handlers, service logic, persistence, and Android module
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -30,6 +34,7 @@ const (
 	OutboxKindLocation = "location"
 	OutboxKindQuote    = "quote"
 	OutboxKindLink     = "link"
+	OutboxKindRevoke   = "revoke"
 
 	OutboxKindChatHistory = "chat_history"
 	OutboxKindMiniProgram = "mini_program"
@@ -205,6 +210,7 @@ type SendActionRequest struct {
 	MiniProgramType     int      `json:"mini_program_type,omitempty"`
 	EmojiMD5            string   `json:"emoji_md5,omitempty"`
 	EmojiProductID      string   `json:"emoji_product_id,omitempty"`
+	ChatRecordID        int64    `json:"chat_record_id,omitempty"`
 	RecordTitle         string   `json:"record_title,omitempty"`
 	RecordDescription   string   `json:"record_description,omitempty"`
 	RecordItemXML       string   `json:"recorditem_xml,omitempty"`
@@ -273,6 +279,9 @@ func (req SendActionRequest) Validate(defaultDevice string) (SendActionRequest, 
 	req.LocationPoiTips = strings.TrimSpace(req.LocationPoiTips)
 	if req.SourceChatRecordID <= 0 && len(req.SourceChatRecordIDs) == 1 {
 		req.SourceChatRecordID = req.SourceChatRecordIDs[0]
+	}
+	if req.ChatRecordID <= 0 {
+		req.ChatRecordID = req.SourceChatRecordID
 	}
 	if req.QuoteMsgID <= 0 {
 		req.QuoteMsgID = req.QuoteChatRecordID
@@ -344,6 +353,14 @@ func (req SendActionRequest) Validate(defaultDevice string) (SendActionRequest, 
 		}
 		if req.QuoteMsgID <= 0 {
 			return req, errors.New("quote_msg_id is required")
+		}
+	case OutboxKindRevoke:
+		if req.ChatRecordID <= 0 {
+			return req, errors.New("chat_record_id is required")
+		}
+		req.SourceChatRecordID = req.ChatRecordID
+		if req.Text == "" {
+			req.Text = "[撤回]"
 		}
 	case OutboxKindLink:
 		if req.SourceChatRecordID <= 0 {
@@ -422,7 +439,7 @@ func (req SendActionRequest) Validate(defaultDevice string) (SendActionRequest, 
 			}
 		}
 	default:
-		return req, errors.New("kind must be text, image, video, voice, file, emoji, location, quote, link, mini_program, or chat_history")
+		return req, errors.New("kind must be text, image, video, voice, file, emoji, location, quote, link, mini_program, chat_history, or revoke")
 	}
 	return req, nil
 }

@@ -1,3 +1,7 @@
+// @input: net/http, os, path/filepath, strings; generated public docs content and doc file registry
+// @output: Embedded OpenAPI JSON/HTML documentation and static public protocol markdown assets
+// @position: Public protocol documentation source served by the bridge HTTP layer
+// @auto-doc: Update header and folder INDEX.md when this file changes
 package bridge
 
 import (
@@ -657,6 +661,7 @@ const openAPIDocsHTML = `<!doctype html>
               <tr><td>位置</td><td><code>/api/v1/messages/location</code></td><td><span class="status stable">稳定</span></td><td><code>location_latitude</code>、<code>location_longitude</code></td><td>服务端校验经纬度范围。</td></tr>
               <tr><td>引用</td><td><code>/api/v1/messages/quote</code></td><td><span class="status partial">样本可用</span></td><td><code>text</code>、<code>quote_msg_id</code></td><td>群聊引用仍需要更多样本。</td></tr>
               <tr><td>链接</td><td><code>/api/v1/messages/link</code></td><td><span class="status stable">稳定</span></td><td><code>source_chat_record_id</code> 或标题 + URL</td><td>可原样转发，也可直接构造。</td></tr>
+              <tr><td>撤回</td><td><code>/api/v1/messages/revoke</code></td><td><span class="status partial">实验中</span></td><td><code>chat_record_id</code></td><td>仅支持撤回本机已发送且本地 message 表仍可查询的消息。</td></tr>
               <tr><td>小程序</td><td><code>/api/v1/messages/mini-program</code></td><td><span class="status partial">源转发稳定</span></td><td><code>source_chat_record_id</code> 或 username + page path</td><td>直接构造还需要真实样本。</td></tr>
               <tr><td>聊天记录</td><td><code>/api/v1/messages/chat-history</code></td><td><span class="status partial">转发限定</span></td><td><code>source_chat_record_ids</code>、<code>recorditem_xml</code></td><td>不开放任意 raw XML 自动化。</td></tr>
               <tr><td>支付/红包/转账</td><td>无</td><td><span class="status readonly">只读识别</span></td><td><code>kind=payment</code>、<code>subtype</code></td><td>出站自动化明确不支持。</td></tr>
@@ -921,6 +926,20 @@ const openAPIJSONDocument = `{
         "description": "普通网页链接卡片；可用 source_chat_record_id 原样转发，也可用标题和 URL 直接构造。",
         "security": [{ "BridgeAPIKeyHeader": [] }, { "BridgeAPIKeyQuery": [] }, { "BridgePasswordHeader": [] }, { "BridgePasswordQuery": [] }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LinkMessageRequest" } } } },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SendQueuedResponse" },
+          "400": { "$ref": "#/components/responses/ErrorResponse" },
+          "401": { "$ref": "#/components/responses/ErrorResponse" }
+        }
+      }
+    },
+    "/api/v1/messages/revoke": {
+      "post": {
+        "tags": ["外部发送"],
+        "summary": "撤回已发送消息",
+        "description": "最小撤回入口。当前只支持撤回本机已发送、且手机模块仍能在本地 message 表查到的消息。",
+        "security": [{ "BridgeAPIKeyHeader": [] }, { "BridgeAPIKeyQuery": [] }, { "BridgePasswordHeader": [] }, { "BridgePasswordQuery": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RevokeMessageRequest" } } } },
         "responses": {
           "200": { "$ref": "#/components/responses/SendQueuedResponse" },
           "400": { "$ref": "#/components/responses/ErrorResponse" },
@@ -1845,6 +1864,18 @@ const openAPIJSONDocument = `{
           }
         ]
       },
+      "RevokeMessageRequest": {
+        "allOf": [
+          { "$ref": "#/components/schemas/SendTarget" },
+          {
+            "type": "object",
+            "required": ["chat_record_id"],
+            "properties": {
+              "chat_record_id": { "type": "integer", "format": "int64", "description": "要撤回的本地消息记录 ID。" }
+            }
+          }
+        ]
+      },
       "MiniProgramMessageRequest": {
         "allOf": [
           { "$ref": "#/components/schemas/SendTarget" },
@@ -1921,7 +1952,7 @@ const openAPIJSONDocument = `{
           },
           "kind": {
             "type": "string",
-            "enum": ["text", "image", "video", "voice", "file", "emoji", "location", "quote", "link", "mini_program", "chat_history"]
+            "enum": ["text", "image", "video", "voice", "file", "emoji", "location", "quote", "link", "revoke", "mini_program", "chat_history"]
           },
           "text": { "type": "string" },
           "media_kind": { "type": "string" },
@@ -1947,6 +1978,7 @@ const openAPIJSONDocument = `{
           "mini_program_type": { "type": "integer" },
           "emoji_md5": { "type": "string" },
           "emoji_product_id": { "type": "string" },
+          "chat_record_id": { "type": "integer", "format": "int64" },
           "record_title": { "type": "string" },
           "record_description": { "type": "string" },
           "recorditem_xml": { "type": "string" },

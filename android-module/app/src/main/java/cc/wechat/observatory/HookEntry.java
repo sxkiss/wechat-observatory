@@ -134,6 +134,15 @@ public final class HookEntry implements IXposedHookLoadPackage {
         String senderWxid;
     }
 
+    private static final class RevokeSource {
+        long msgId;
+        long msgSvrId;
+        String talker;
+        int isSend;
+        long createTime;
+        int type;
+    }
+
     private static final class ChatHistorySource {
         long msgId;
         long msgSvrId;
@@ -3239,6 +3248,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
         if ("link".equals(dispatchItem.kind)) {
             return sendLinkAction(config, classLoader, dispatchItem.wxid, text, item);
         }
+        if ("revoke".equals(dispatchItem.kind)) {
+            return sendRevokeAction(config, classLoader, dispatchItem.wxid, item);
+        }
         if ("mini_program".equals(dispatchItem.kind)) {
             return sendMiniProgramAction(config, classLoader, dispatchItem.wxid, text, item);
         }
@@ -3544,6 +3556,23 @@ public final class HookEntry implements IXposedHookLoadPackage {
             return sendLink(config, classLoader, wxid, title, description, url, appName, thumbUrl);
         } catch (Throwable t) {
             return SendResult.failed("link send failed: " + shortError(t));
+        }
+    }
+
+    private static SendResult sendRevokeAction(BridgeConfig config, ClassLoader classLoader, String wxid, JSONObject item) {
+        try {
+            JSONObject payload = item.optJSONObject("payload_json");
+            long chatRecordId = firstPositiveLong(
+                    item.optLong("chat_record_id", 0L),
+                    payload == null ? 0L : payload.optLong("chat_record_id", 0L),
+                    item.optLong("source_chat_record_id", 0L),
+                    payload == null ? 0L : payload.optLong("source_chat_record_id", 0L));
+            if (chatRecordId <= 0L) {
+                return SendResult.failed("chat_record_id is required");
+            }
+            return sendRevoke(config, classLoader, wxid, chatRecordId);
+        } catch (Throwable t) {
+            return SendResult.failed("revoke send failed: " + shortError(t));
         }
     }
 
@@ -4246,6 +4275,60 @@ public final class HookEntry implements IXposedHookLoadPackage {
         return SendResult.failed("WeChat quote send invoked but no outgoing quote message was recorded");
     }
 
+    private static SendResult sendRevoke(BridgeConfig config, ClassLoader classLoader, String wxid, long chatRecordId) {
+        classLoader = runtimeClassLoader(classLoader);
+        if (classLoader == null) {
+            return SendResult.failed("WeChat classLoader is not available");
+        }
+        if (isBlank(wxid) || chatRecordId <= 0L) {
+            return SendResult.failed("wxid and chat_record_id are required");
+        }
+        Object db = ensureMessageDatabase(config);
+        if (db == null) {
+            return SendResult.failed("WeChat message database is not available for revoke");
+        }
+        final ClassLoader targetClassLoader = classLoader;
+        final RevokeSource source;
+        try {
+            source = loadRevokeSource(db, chatRecordId, wxid);
+        } catch (Throwable t) {
+            return SendResult.failed("revoke source lookup failed: " + shortError(t));
+        }
+        if (source == null) {
+            return SendResult.failed("source message was not found in local WeChat message database");
+        }
+        if (source.isSend != 1) {
+            return SendResult.failed("only locally sent messages can be revoked");
+        }
+        if (isBlank(source.talker)) {
+            return SendResult.failed("source message talker is empty");
+        }
+        if (!wxid.equals(source.talker)) {
+            return SendResult.failed("revoke target wxid does not match source message talker");
+        }
+        if (source.msgSvrId <= 0L) {
+            return SendResult.failed("source message msgSvrId is missing");
+        }
+        if (source.createTime <= 0L) {
+            return SendResult.failed("source message createTime is missing");
+        }
+        try {
+            Boolean published = callOnMainThread(new Callable<Boolean>() {
+                @Override
+                public Boolean call() throws Exception {
+                    return Boolean.valueOf(revokeViaRevokeMsgEvent(targetClassLoader, source));
+                }
+            });
+            if (!Boolean.TRUE.equals(published)) {
+                return SendResult.failed("WeChat revoke event had no listener");
+            }
+            log("sendRevoke invoked talker=" + source.talker + " msgId=" + source.msgId + " msgSvrId=" + source.msgSvrId);
+            return SendResult.sent(source.msgId > 0L ? source.msgId : chatRecordId);
+        } catch (Throwable t) {
+            return SendResult.failed("WeChat revoke failed via RevokeMsgEvent: " + shortError(t));
+        }
+    }
+
     private static SendResult sendChatHistory(BridgeConfig config, ClassLoader classLoader, String wxid, String title, String description, String recordItemXML) {
         classLoader = runtimeClassLoader(classLoader);
         if (classLoader == null) {
@@ -4461,6 +4544,46 @@ public final class HookEntry implements IXposedHookLoadPackage {
         return queryQuoteSource(db, quoteMsgId, quoteTalker, false, false);
     }
 
+    private static RevokeSource loadRevokeSource(Object db, long msgId, String talker) throws Exception {
+        RevokeSource source = queryRevokeSource(db, msgId, talker, true);
+        if (source != null) {
+            return source;
+        }
+        return queryRevokeSource(db, msgId, talker, false);
+    }
+
+    private static RevokeSource queryRevokeSource(Object db, long msgId, String talker, boolean requireTalker) throws Exception {
+        String where = requireTalker ? "msgId = ? AND talker = ?" : "msgId = ?";
+        String[] args = requireTalker
+                ? new String[]{String.valueOf(msgId), talker}
+                : new String[]{String.valueOf(msgId)};
+        Object cursor = rawQuery(db, ""
+                + "SELECT msgId,COALESCE(msgSvrId,0),talker,isSend,createTime,type "
+                + "FROM message "
+                + "WHERE " + where + " "
+                + "LIMIT 1", args);
+        if (cursor == null) {
+            return null;
+        }
+        try {
+            Method moveToFirst = findNoArgMethod(cursor.getClass(), "moveToFirst");
+            if (!Boolean.TRUE.equals(moveToFirst.invoke(cursor))) {
+                return null;
+            }
+            RevokeSource source = new RevokeSource();
+            int column = 0;
+            source.msgId = longColumn(cursor, column++);
+            source.msgSvrId = longColumn(cursor, column++);
+            source.talker = stringColumn(cursor, column++);
+            source.isSend = intColumn(cursor, column++);
+            source.createTime = normalizeCreateTime(longColumn(cursor, column++));
+            source.type = intColumn(cursor, column);
+            return source.msgId > 0L ? source : null;
+        } finally {
+            closeQuietly(cursor);
+        }
+    }
+
     private static QuoteSource queryQuoteSource(Object db, long quoteMsgId, String quoteTalker, boolean requireTalker, boolean includeMsgSource) throws Exception {
         String msgSourceSelect = includeMsgSource ? ",COALESCE(msgSource,'')" : ",''";
         String where = requireTalker ? "msgId = ? AND talker = ?" : "msgId = ?";
@@ -4503,6 +4626,26 @@ public final class HookEntry implements IXposedHookLoadPackage {
         } finally {
             closeQuietly(cursor);
         }
+    }
+
+    private static boolean revokeViaRevokeMsgEvent(ClassLoader classLoader, RevokeSource source) throws Exception {
+        boolean preferImage = isImageLikeMessageType(source == null ? 0 : source.type);
+        if (publishRevokeMsgEvent(classLoader, source, preferImage)) {
+            return true;
+        }
+        return publishRevokeMsgEvent(classLoader, source, !preferImage);
+    }
+
+    private static boolean publishRevokeMsgEvent(ClassLoader classLoader, RevokeSource source, boolean isImage) throws Exception {
+        Class<?> eventClass = findClass(classLoader, "com.tencent.mm.autogen.events.RevokeMsgEvent");
+        Object event = eventClass.getDeclaredConstructor().newInstance();
+        Object payload = resolveEventPayloadObject(event);
+        if (payload == null) {
+            throw new IllegalStateException("RevokeMsgEvent payload is unavailable");
+        }
+        applyRevokePayload(payload, source, isImage);
+        Object result = findNoArgMethod(event.getClass(), "e").invoke(event);
+        return !(result instanceof Boolean) || ((Boolean) result).booleanValue();
     }
 
     private static long sendViaQuoteAppMsg(ClassLoader classLoader, String wxid, String text, QuoteSource source) throws Exception {
@@ -5979,6 +6122,158 @@ public final class HookEntry implements IXposedHookLoadPackage {
             log("resolve message type failed, fallback to text type 1: " + shortError(t));
         }
         return 1;
+    }
+
+    private static boolean isImageLikeMessageType(int type) {
+        return type == 3 || type == 47;
+    }
+
+    private static Object resolveEventPayloadObject(Object event) throws Exception {
+        if (event == null) {
+            return null;
+        }
+        for (Class<?> current = event.getClass(); current != null && current != Object.class; current = current.getSuperclass()) {
+            Field[] fields = current.getDeclaredFields();
+            for (Field field : fields) {
+                if (Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive()) {
+                    continue;
+                }
+                field.setAccessible(true);
+                Object value = field.get(event);
+                if (value == null) {
+                    Class<?> fieldType = field.getType();
+                    if (!fieldType.isInterface() && !Modifier.isAbstract(fieldType.getModifiers())) {
+                        try {
+                            value = newInstanceAny(fieldType);
+                            field.set(event, value);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+                if (value != null) {
+                    return value;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static void applyRevokePayload(Object payload, RevokeSource source, boolean isImage) throws Exception {
+        if (payload == null || source == null) {
+            throw new IllegalArgumentException("revoke payload and source are required");
+        }
+        List<Field> stringFields = collectInstanceFieldsByType(payload.getClass(), String.class);
+        List<Field> longFields = collectNumericInstanceFields(payload.getClass(), true);
+        List<Field> intFields = collectNumericInstanceFields(payload.getClass(), false);
+        List<Field> boolFields = collectInstanceFieldsByType(payload.getClass(), Boolean.TYPE, Boolean.class);
+
+        if (!stringFields.isEmpty()) {
+            stringFields.get(0).set(payload, firstNonBlank(source.talker, ""));
+        }
+        if (stringFields.size() > 1) {
+            stringFields.get(1).set(payload, String.valueOf(source.msgId));
+        }
+        if (longFields.size() > 0) {
+            setLongFieldValue(longFields.get(0), payload, firstPositiveLong(source.msgSvrId, source.msgId));
+        }
+        if (longFields.size() > 1) {
+            setLongFieldValue(longFields.get(1), payload, source.msgId);
+        }
+        if (longFields.size() > 2) {
+            setLongFieldValue(longFields.get(2), payload, source.createTime);
+        }
+        if (intFields.size() > 0) {
+            setIntFieldValue(intFields.get(0), payload, safeLongToInt(firstPositiveLong(source.msgSvrId, source.msgId)));
+        }
+        if (intFields.size() > 1) {
+            setIntFieldValue(intFields.get(1), payload, safeLongToInt(source.msgId));
+        }
+        if (intFields.size() > 2) {
+            setIntFieldValue(intFields.get(2), payload, safeLongToInt(source.createTime));
+        }
+        if (!boolFields.isEmpty()) {
+            Field field = boolFields.get(0);
+            if (field.getType() == Boolean.class) {
+                field.set(payload, Boolean.valueOf(isImage));
+            } else {
+                field.setBoolean(payload, isImage);
+            }
+        }
+    }
+
+    private static List<Field> collectInstanceFieldsByType(Class<?> cls, Class<?>... types) {
+        List<Field> out = new ArrayList<>();
+        if (cls == null || types == null || types.length == 0) {
+            return out;
+        }
+        for (Class<?> current = cls; current != null && current != Object.class; current = current.getSuperclass()) {
+            Field[] fields = current.getDeclaredFields();
+            for (Field field : fields) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                for (Class<?> type : types) {
+                    if (field.getType() == type) {
+                        field.setAccessible(true);
+                        out.add(field);
+                        break;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    private static List<Field> collectNumericInstanceFields(Class<?> cls, boolean preferLong) {
+        List<Field> out = new ArrayList<>();
+        if (cls == null) {
+            return out;
+        }
+        for (Class<?> current = cls; current != null && current != Object.class; current = current.getSuperclass()) {
+            Field[] fields = current.getDeclaredFields();
+            for (Field field : fields) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                Class<?> type = field.getType();
+                if (preferLong) {
+                    if (type != Long.TYPE && type != Long.class) {
+                        continue;
+                    }
+                } else if (type != Integer.TYPE && type != Integer.class) {
+                    continue;
+                }
+                field.setAccessible(true);
+                out.add(field);
+            }
+        }
+        return out;
+    }
+
+    private static int safeLongToInt(long value) {
+        if (value <= Integer.MIN_VALUE) {
+            return Integer.MIN_VALUE;
+        }
+        if (value >= Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) value;
+    }
+
+    private static void setLongFieldValue(Field field, Object target, long value) throws Exception {
+        if (field.getType() == Long.class) {
+            field.set(target, Long.valueOf(value));
+            return;
+        }
+        field.setLong(target, value);
+    }
+
+    private static void setIntFieldValue(Field field, Object target, int value) throws Exception {
+        if (field.getType() == Integer.class) {
+            field.set(target, Integer.valueOf(value));
+            return;
+        }
+        field.setInt(target, value);
     }
 
     private static Class<?> findClass(ClassLoader classLoader, String name) throws ClassNotFoundException {
